@@ -7,17 +7,55 @@ import pyqtgraph as pg
 import pyqtgraph.opengl as gl
 from pyqtgraph.opengl import shaders
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QVector3D, QColor
+from PySide6.QtGui import QVector3D, QVector4D, QColor
+from OpenGL import GL
+from PySide6.QtGui import QMatrix4x4
 from .document import Body
 from . import kernel
 
+
+class GradientBackground(gl.GLGraphicsItem.GLGraphicsItem):
+    """Pionowy gradient tła (jak w wersji HTML), rysowany jako pierwszy, bez głębi."""
+
+    def __init__(self, top, bottom):
+        super().__init__()
+        self.top, self.bottom = top, bottom
+        self.setDepthValue(-1000)
+
+    def paint(self):
+        GL.glMatrixMode(GL.GL_PROJECTION)
+        GL.glPushMatrix()
+        GL.glLoadIdentity()
+        GL.glMatrixMode(GL.GL_MODELVIEW)
+        GL.glPushMatrix()
+        GL.glLoadIdentity()
+        GL.glDisable(GL.GL_DEPTH_TEST)
+        GL.glDisable(GL.GL_BLEND)
+        GL.glDepthMask(GL.GL_FALSE)
+        GL.glBegin(GL.GL_QUADS)
+        GL.glColor3f(*self.top)
+        GL.glVertex2f(-1, 1)
+        GL.glVertex2f(1, 1)
+        GL.glColor3f(*self.bottom)
+        GL.glVertex2f(1, -1)
+        GL.glVertex2f(-1, -1)
+        GL.glEnd()
+        GL.glDepthMask(GL.GL_TRUE)
+        GL.glEnable(GL.GL_DEPTH_TEST)
+        GL.glMatrixMode(GL.GL_PROJECTION)
+        GL.glPopMatrix()
+        GL.glMatrixMode(GL.GL_MODELVIEW)
+        GL.glPopMatrix()
+
 # Wygląd jak w wersji HTML: jasne tło, niebieska siatka, jasnoszare bryły z czarnym obrysem.
-BACKGROUND = '#f3f6fc'
+BACKGROUND = '#edf2f8'
 GRID_COLOR = '#9fb6cf'
+BG_TOP = (0.985, 0.992, 1.0)
+BG_BOTTOM = (0.875, 0.915, 0.96)
 SOLID_COLOR = (.54, .54, .56, 1)
 SOLID_SELECTED = (.40, .60, .90, 1)
 EDGE_COLOR = (0, 0, 0, 1)
-SKETCH_COLOR = (.15, .45, .85, 1)
+SKETCH_COLOR = (.106, .427, .757, 1)
 PREVIEW_COLOR = (1, .48, .05, 1)
 PLANE_COLORS = {'XY': '#3b82f6', 'XZ': '#22a06b', 'YZ': '#e5484d'}
 PLANE_HALF = 30.0
@@ -33,15 +71,15 @@ class CadView(gl.GLViewWidget):
     sketchDrawn = Signal(str, str, float, float, float, float)
     sketchInfo = Signal(str)
     # tryb "studio" (jak HTML): klik-klik na płaszczyźnie szkicu i ogólne kliknięcia / ruch kursora
-    sketchMoved = Signal(str, float, float)
-    sketchClicked = Signal(str, float, float)
+    sketchMoved = Signal(object, float, float)
+    sketchClicked = Signal(object, float, float)
     viewClicked = Signal(float, float, bool, bool)  # x, y, Shift, Ctrl
     viewHover = Signal(float, float)
     bodyClicked = Signal(str, bool)
     selectionCleared = Signal()
     contextRequested = Signal(float, float)
-    handleDragged = Signal(float)   # przesunięcie uchwytu wyciągnięcia wzdłuż jego osi (mm)
-    handleReleased = Signal()
+    handleDragged = Signal(str, float)   # id uchwytu, przesunięcie wzdłuż jego osi (mm)
+    handleReleased = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -60,14 +98,21 @@ class CadView(gl.GLViewWidget):
                     }
                 """),
             ])
+        self.setMouseTracking(True)   # bez tego widok nie dostaje ruchów myszy bez wciśniętego przycisku (brak podglądu na żywo)
         self.setBackgroundColor(BACKGROUND)
         self.setCameraPosition(distance=120, elevation=25, azimuth=-55)
-        grid = gl.GLGridItem()
-        grid.setSize(200, 200)
-        grid.setSpacing(10, 10)
-        grid.setColor(pg.mkColor(GRID_COLOR))
-        self.addItem(grid)
-        self.grid_item = grid
+        self.addItem(GradientBackground(BG_TOP, BG_BOTTOM))
+        self.grid_items = []
+        for size, step, color in ((600, 5, '#d1dcea'), (600, 25, '#a3b9cf')):
+            grid = gl.GLGridItem()
+            grid.setSize(size, size)
+            grid.setSpacing(step, step)
+            grid.setColor(pg.mkColor(color))
+            self.addItem(grid)
+            self.grid_items.append(grid)
+        self.grid_item = self.grid_items[-1]
+        self.custom_plane_items = []
+        self.marker_items = []
         self.bodies = ()
         self.model_items = []
         self.highlight_items = []
@@ -94,7 +139,7 @@ class CadView(gl.GLViewWidget):
         self.click_mode = False       # True: studio (klik-klik), False: klasyczne okno (przeciąganie)
         self.tints = {}               # id bryły -> kolor RGBA (np. baza / narzędzia Boolean)
         self.preview_items = []
-        self.handle = None            # (punkt, kierunek) uchwytu-strzałki wyciągnięcia
+        self.handles = []             # uchwyty-strzałki: dict(id, tip, dir, color, ring=(środek, oś, promień)|None)
         self.handle_items = []
         self._handle_drag = None
 
@@ -110,7 +155,8 @@ class CadView(gl.GLViewWidget):
             if not body.visible or body.mesh is None:
                 continue
             mesh = body.mesh
-            color = self.tints.get(body.id) or (SOLID_SELECTED if body.id in self.selected_bodies else SOLID_COLOR)
+            color = self.tints.get(body.id) or SOLID_COLOR
+            picked = body.id in self.selected_bodies
             if len(mesh.triangles):
                 item = gl.GLMeshItem(vertexes=mesh.vertices, faces=mesh.triangles, smooth=True, color=color, shader='rccad', drawEdges=False)
                 item.setGLOptions('opaque')
@@ -119,7 +165,8 @@ class CadView(gl.GLViewWidget):
             for index, points in mesh.edges.items():
                 selected = index in self.selected_edges.get(body.id, set())
                 base = SKETCH_COLOR if body.kind == 'sketch' else EDGE_COLOR
-                line = gl.GLLinePlotItem(pos=points, color=PREVIEW_COLOR if selected else base, width=4 if selected else (2.5 if body.kind == 'sketch' else 1.5), antialias=True)
+                hot = selected or picked
+                line = gl.GLLinePlotItem(pos=points, color=PREVIEW_COLOR if hot else base, width=3.5 if hot else (2.5 if body.kind == 'sketch' else 1.5), antialias=True)
                 self.addItem(line)
                 self.model_items.append(line)
         self.update()
@@ -182,10 +229,12 @@ class CadView(gl.GLViewWidget):
         if ray is None:
             return None
         origin, direction = ray
-        axis = {'XY': 2, 'XZ': 1, 'YZ': 0}[plane]
-        if abs(direction[axis]) < 1e-9:
+        frame = kernel.frame_of(plane)
+        n, o = np.array(frame.normal), np.array(frame.origin)
+        denom = float(direction @ n)
+        if abs(denom) < 1e-9:
             return None
-        t = -origin[axis] / direction[axis]
+        t = float((o - origin) @ n) / denom
         if t <= 0:
             return None
         return t, origin + direction * t
@@ -196,8 +245,9 @@ class CadView(gl.GLViewWidget):
             if self.plane_items[name][0] not in self.items:
                 continue
             hit = self._plane_hit(name, x, y)
-            if hit and all(abs(c) <= PLANE_HALF for i, c in enumerate(hit[1]) if i != {'XY': 2, 'XZ': 1, 'YZ': 0}[name]):
-                if best is None or hit[0] < best[0]:
+            if hit:
+                u, v = kernel.uv_of(name, hit[1])
+                if abs(u) <= PLANE_HALF and abs(v) <= PLANE_HALF and (best is None or hit[0] < best[0]):
                     best = (hit[0], name)
         return best[1] if best else None
 
@@ -205,8 +255,7 @@ class CadView(gl.GLViewWidget):
         hit = self._plane_hit(plane, x, y)
         if hit is None:
             return None
-        i, j = kernel.PLANE_AXES[plane]
-        return float(hit[1][i]), float(hit[1][j])
+        return kernel.uv_of(plane, hit[1])
 
     def _snap(self, point, event=None):
         if event is not None and event.modifiers() & Qt.AltModifier:
@@ -250,7 +299,22 @@ class CadView(gl.GLViewWidget):
         self.update()
 
     # ---------- podglądy i wybieranie (studio) ----------
-    def set_preview_mesh(self, mesh, color=(.25, .55, .95, .55), line_color=(.1, .25, .5, 1), width=1.5):
+    def _dashed(self, points):
+        pts = np.asarray(points, float)
+        seg = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+        total = float(seg.sum())
+        if total < 1e-9:
+            return None
+        dash = max(float(self.opts['distance']) * .012, 1e-3)
+        cum = np.concatenate([[0], np.cumsum(seg)])
+        starts = np.arange(0, total, dash * 2)
+        ends = np.minimum(starts + dash, total)
+        point_at = lambda t: np.column_stack([np.interp(t, cum, pts[:, k]) for k in range(3)])
+        out = np.empty((len(starts) * 2, 3))
+        out[0::2], out[1::2] = point_at(starts), point_at(ends)
+        return out.astype(np.float32)
+
+    def set_preview_mesh(self, mesh, color=(.25, .55, .95, .55), line_color=(.1, .25, .5, 1), width=1.5, dashed=False):
         for item in self.preview_items:
             self.removeItem(item)
         self.preview_items = []
@@ -261,39 +325,70 @@ class CadView(gl.GLViewWidget):
                 self.addItem(item)
                 self.preview_items.append(item)
             for points in mesh.edges.values():
-                line = gl.GLLinePlotItem(pos=points, color=line_color, width=width, antialias=True)
+                if dashed:
+                    seg = self._dashed(points)
+                    if seg is None:
+                        continue
+                    line = gl.GLLinePlotItem(pos=seg, color=line_color, width=width, antialias=True, mode='lines')
+                else:
+                    line = gl.GLLinePlotItem(pos=points, color=line_color, width=width, antialias=True)
                 self.addItem(line)
                 self.preview_items.append(line)
         self.update()
 
-    def set_handle(self, tip, direction):
-        """Strzałka wyciągnięcia: grot w punkcie `tip`, oś `direction` (wersor). None usuwa uchwyt."""
+    def set_handles(self, handles):
+        """Uchwyty-strzałki: lista dict(id, tip, dir, color, ring=(środek, oś, promień)|None). Pusta lista usuwa."""
         for item in self.handle_items:
             self.removeItem(item)
         self.handle_items = []
-        self.handle = None
-        if tip is not None:
-            tip = np.asarray(tip, dtype=float)
-            d = np.asarray(direction, dtype=float)
+        self.handles = []
+        size = float(self.opts['distance']) * .06
+        for h in handles or []:
+            tip = np.asarray(h['tip'], dtype=float)
+            d = np.asarray(h['dir'], dtype=float)
             d = d / np.linalg.norm(d)
-            size = float(self.opts['distance']) * .06
+            color = h.get('color', (1, .45, 0, 1))
             side = np.cross(d, (0, 0, 1) if abs(d[2]) < .9 else (1, 0, 0))
             side = side / np.linalg.norm(side) * size * .45
             other = np.cross(d, side)
             base = tip - d * size
-            for pts in ([tip - d * size * 3, tip], [tip, base + side], [tip, base - side], [tip, base + other], [tip, base - other]):
-                line = gl.GLLinePlotItem(pos=np.array(pts, dtype=np.float32), color=(1, .45, .0, 1), width=4, antialias=True)
+            parts = [[tip - d * size * 2.5, tip], [tip, base + side], [tip, base - side], [tip, base + other], [tip, base - other]]
+            ring = h.get('ring')
+            if ring:
+                c, axis, radius = np.asarray(ring[0], float), np.asarray(ring[1], float), float(ring[2])
+                axis = axis / np.linalg.norm(axis)
+                e1 = np.cross(axis, (0, 0, 1) if abs(axis[2]) < .9 else (1, 0, 0))
+                e1 /= np.linalg.norm(e1)
+                e2 = np.cross(axis, e1)
+                parts.append([c + radius * (np.cos(a) * e1 + np.sin(a) * e2) for a in np.linspace(0, 2 * np.pi, 73)])
+            for pts in parts:
+                line = gl.GLLinePlotItem(pos=np.array(pts, dtype=np.float32), color=color, width=4, antialias=True)
                 line.setDepthValue(10)
                 self.addItem(line)
                 self.handle_items.append(line)
-            self.handle = (tip, d)
+            self.handles.append(dict(id=h['id'], tip=tip, dir=d))
         self.update()
 
-    def _handle_screen(self):
-        tip, d = self.handle
+    def set_handle(self, tip, direction):
+        """Pojedynczy uchwyt wyciągnięcia (zgodność wsteczna)."""
+        self.set_handles([] if tip is None else [dict(id='ex', tip=tip, dir=direction)])
+
+    def _screen_dir(self, tip, d):
         length = float(self.opts['distance']) * .2
         xy, _, _ = self.project_points(np.array([tip, tip + d * length]))
         return xy[0], xy[1], length
+
+    def _grab_handle(self, x, y):
+        best = None
+        for h in self.handles:
+            try:
+                s0, s1, length = self._screen_dir(h['tip'], h['dir'])
+            except Exception:
+                continue
+            dist = float(np.hypot(x - s0[0], y - s0[1]))
+            if dist < 20 and (best is None or dist < best[0]):
+                best = (dist, h['id'], s0, s1, length)
+        return best
 
     def pick_body(self, x, y):
         ray = self._ray(x, y)
@@ -335,15 +430,22 @@ class CadView(gl.GLViewWidget):
         for body in self.bodies:
             if body.kind != 'sketch' or not body.visible or not body.mesh:
                 continue
+            try:
+                if not body.shape.IsClosed():
+                    continue
+            except Exception:
+                pass
             hit = self._plane_hit(body.plane, x, y)
             if not hit:
                 continue
-            i, j = kernel.PLANE_AXES[body.plane]
-            px, py = float(hit[1][i]), float(hit[1][j])
+            frame = kernel.frame_of(body.plane)
+            o, ux, uy = np.array(frame.origin), np.array(frame.xdir), np.array(frame.ydir)
+            px, py = kernel.uv_of(body.plane, hit[1])
             crossings = 0
             for points in body.mesh.edges.values():
-                a, b = points[:-1], points[1:]
-                ax, ay, bx, by = a[:, i], a[:, j], b[:, i], b[:, j]
+                rel = points.astype(float) - o
+                us, vs = rel @ ux, rel @ uy
+                ax, ay, bx, by = us[:-1], vs[:-1], us[1:], vs[1:]
                 straddle = (ay > py) != (by > py)
                 with np.errstate(divide='ignore', invalid='ignore'):
                     xc = ax + (py - ay) * (bx - ax) / (by - ay)
@@ -351,6 +453,59 @@ class CadView(gl.GLViewWidget):
             if crossings % 2 == 1 and (best is None or hit[0] < best[0]):
                 best = (hit[0], body.id)
         return best[1] if best else None
+
+    # ---------- siatka szkicu, płaszczyzna ściany, kamera, znacznik ----------
+    def set_grid_frame(self, plane):
+        """Siatka leży na płaszczyźnie szkicu (None = XY)."""
+        frame = kernel.frame_of(plane or 'XY')
+        m = QMatrix4x4()
+        x, y, n, o = (np.array(v, float) for v in (frame.xdir, frame.ydir, frame.normal, frame.origin))
+        m.setToIdentity()
+        for r in range(3):
+            m.setRow(r, QVector4D(float(x[r]), float(y[r]), float(n[r]), float(o[r])))
+        for grid in self.grid_items:
+            grid.setTransform(m)
+        self.update()
+
+    def show_custom_plane(self, frame, half=30.0, color=(1.0, .55, .1)):
+        for item in self.custom_plane_items:
+            self.removeItem(item)
+        self.custom_plane_items = []
+        if frame is not None:
+            pts = np.array([kernel.to_world(frame, u, v) for u, v in ((-half, -half), (half, -half), (half, half), (-half, half))], dtype=np.float32)
+            fill = gl.GLMeshItem(vertexes=pts, faces=np.array([[0, 1, 2], [0, 2, 3]]), color=(*color, .14), smooth=False, drawEdges=False)
+            fill.setGLOptions('translucent')
+            outline = gl.GLLinePlotItem(pos=np.array([*pts, pts[0]], dtype=np.float32), color=(*color, .9), width=2, antialias=True)
+            for item in (fill, outline):
+                self.addItem(item)
+                self.custom_plane_items.append(item)
+        self.update()
+
+    def look_along(self, plane):
+        """Kamera patrzy na płaszczyznę szkicu wprost (z jej strony normalnej)."""
+        frame = kernel.frame_of(plane)
+        n = np.array(frame.normal, float)
+        self.opts['center'] = QVector3D(*[float(c) for c in frame.origin])
+        self.setCameraPosition(elevation=math.degrees(math.asin(max(-1, min(1, n[2])))), azimuth=math.degrees(math.atan2(n[1], n[0])))
+
+    def set_marker(self, point, color=(0.1, .55, .45, 1)):
+        """Celownik kursora szkicu (zielony / pomarańczowy w trakcie rysowania)."""
+        for item in self.marker_items:
+            self.removeItem(item)
+        self.marker_items = []
+        if point is not None:
+            p = np.asarray(point, float)
+            r = float(self.opts['distance']) * .012
+            frame = kernel.frame_of(self.sketch_plane) if self.sketch_plane else kernel.STANDARD['XY']
+            x, y = np.array(frame.xdir), np.array(frame.ydir)
+            ang = np.linspace(0, 2 * np.pi, 25)
+            ring = np.array([p + r * .55 * (np.cos(a) * x + np.sin(a) * y) for a in ang], dtype=np.float32)
+            for pts in (ring, np.array([p - x * r, p + x * r], dtype=np.float32), np.array([p - y * r, p + y * r], dtype=np.float32)):
+                line = gl.GLLinePlotItem(pos=pts, color=color, width=1.6, antialias=True)
+                line.setDepthValue(20)
+                self.addItem(line)
+                self.marker_items.append(line)
+        self.update()
 
     def camera_matrix(self):
         viewport = (0, 0, max(1,self.width()), max(1,self.height()))
@@ -439,12 +594,12 @@ class CadView(gl.GLViewWidget):
         pos = event.position()
         buttons = event.buttons()
         if self._handle_drag is not None:
-            x0, y0, s0, s1, length = self._handle_drag
+            hid, x0, y0, s0, s1, length = self._handle_drag
             axis = np.asarray(s1) - np.asarray(s0)
             norm2 = float(axis @ axis)
             if norm2 > 1e-6:
                 moved = np.array([pos.x() - x0, pos.y() - y0])
-                self.handleDragged.emit(float(moved @ axis) / norm2 * length)
+                self.handleDragged.emit(hid, float(moved @ axis) / norm2 * length)
             event.accept()
             return
         if self._sk_start is not None and buttons & Qt.LeftButton:
@@ -496,7 +651,8 @@ class CadView(gl.GLViewWidget):
                 return
             if self.plane_pick:
                 self._highlight_plane(self.plane_at(pos.x(), pos.y()))
-                self.setCursor(Qt.PointingHandCursor if self._hover_plane else Qt.ArrowCursor)
+                self.setCursor(Qt.PointingHandCursor)
+                self.viewHover.emit(pos.x(), pos.y())
             elif self.edge_mode and self.mouse_mode == 'select':
                 self._set_hover_edge(self.nearest_edge(pos.x(), pos.y()))
         except Exception:
@@ -512,16 +668,13 @@ class CadView(gl.GLViewWidget):
                 self._sk_start = self._snap(point, event)
                 event.accept()
                 return
-        if self.handle is not None and event.button() == Qt.LeftButton:
-            try:
-                s0, s1, length = self._handle_screen()
-                if np.hypot(event.position().x() - s0[0], event.position().y() - s0[1]) < 18:
-                    self._handle_drag = (event.position().x(), event.position().y(), s0, s1, length)
-                    self._press = None
-                    event.accept()
-                    return
-            except Exception:
-                pass
+        if self.handles and event.button() == Qt.LeftButton:
+            grabbed = self._grab_handle(event.position().x(), event.position().y())
+            if grabbed:
+                self._handle_drag = (grabbed[1], event.position().x(), event.position().y(), grabbed[2], grabbed[3], grabbed[4])
+                self._press = None
+                event.accept()
+                return
         if event.button() == Qt.RightButton or (event.button() == Qt.LeftButton and event.modifiers() & Qt.ShiftModifier):
             event.accept()  # przesuwanie widoku obsługujemy sami (prawy przycisk lub Shift + przeciąganie)
             return
@@ -529,8 +682,9 @@ class CadView(gl.GLViewWidget):
 
     def mouseReleaseEvent(self, event):
         if self._handle_drag is not None:
+            hid = self._handle_drag[0]
             self._handle_drag = None
-            self.handleReleased.emit()
+            self.handleReleased.emit(hid)
             event.accept()
             return
         if self._sk_start is not None:
@@ -556,6 +710,9 @@ class CadView(gl.GLViewWidget):
         if button != Qt.LeftButton or moved:
             return
         if self.plane_pick:
+            if self.click_mode:
+                self.viewClicked.emit(x, y, bool(event.modifiers() & Qt.ShiftModifier), bool(event.modifiers() & Qt.ControlModifier))
+                return
             name = self.plane_at(x, y)
             if name:
                 self.planeClicked.emit(name)

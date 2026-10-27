@@ -308,10 +308,7 @@ def blend(shape, indices, size, kind="fillet"):
     try:
         # OpenCascade solves all selected edges and their common corners together.
         result = shape.fillet(size, selected) if kind == "fillet" else shape.chamfer(size, None, selected)
-        result = valid(result)
-        if result.Volume() >= shape.Volume() + 1e-5:
-            raise CadError("Nieprawidłowy wynik operacji na krawędziach.")
-        return result
+        return valid(result)
     except CadError:
         raise
     except Exception as exc:
@@ -512,18 +509,23 @@ def circle_tangent2(plane, line1, line2, hint):
     return wp(plane).center(best[1], best[2]).circle(best[3]).wire().val()
 
 
-def text_shape(plane, text, u, v, size=10.0):
+def text_shape(plane, text, u, v, size=10.0, font="Arial", bold=False, halign="left", angle=0.0):
     """Kontury liter (zewnętrzne druty ścian leżących na płaszczyźnie szkicu); wymaga czcionki systemowej."""
     text = str(text).strip()
     if not text:
         raise CadError("Wpisz treść tekstu.")
-    solid = wp(plane).center(float(u), float(v)).text(text, float(size), 0.2, combine=False).val()
+    kind = "bold" if bold else "regular"
+    solid = wp(plane).center(float(u), float(v)).text(text, float(size), 0.2, combine=False, font=font, kind=kind,
+                                                      halign=halign, valign="bottom").val()
     fr = frame_of(plane)
     n0, o0 = np.array(fr.normal), np.array(fr.origin)
     wires = [f.outerWire() for f in (solid.Faces() if solid is not None else [])
              if abs(float((np.array(f.Center().toTuple()) - o0) @ n0)) < 1e-5 and abs(abs(float(np.array(f.normalAt().toTuple()) @ n0)) - 1) < 1e-3]
     if not wires:
         raise CadError("Nie udało się utworzyć tekstu (brak czcionki).")
+    if abs(float(angle)) > 1e-9:
+        pivot = cq.Vector(*to_world(plane, u, v))
+        wires = [w.rotate(pivot, pivot + cq.Vector(*fr.normal), float(angle)) for w in wires]
     return wires
 
 
@@ -644,3 +646,19 @@ def face_at(shape, normal, point, tol=1e-3):
         if abs(float(fn @ n)) > .999 and face.distance(vertex) < max(tol, 1e-3):
             return face, fn
     raise CadError("Wskazana ściana nie jest płaska.")
+
+
+def edge_handle(shape, index):
+    """Środek krawędzi i kierunek (do wnętrza bryły, po dwusiecznej ścian) - położenie strzałki zaokrąglenia / fazy."""
+    edge = shape.Edges()[index]
+    mid = edge.positionAt(.5)
+    total = np.zeros(3)
+    for face in shape.Faces():
+        if any(e.isSame(edge) for e in face.Edges()):
+            total += np.array(face.normalAt(mid).toTuple())
+    n = np.linalg.norm(total)
+    if n < 1e-6:
+        t = np.array(edge.tangentAt(.5).toTuple())
+        total = np.cross(t, (0, 0, 1.0) if abs(t[2]) < .9 else (1.0, 0, 0))
+        n = np.linalg.norm(total)
+    return mid.toTuple(), tuple(float(c) for c in -total / n)

@@ -40,12 +40,24 @@ def s3():
 run('03', s3)
 def s4():
     w.sketch_clicked('XY', 34, 17); settle(800)
-    w.tools['extrude'].click(); w.view_clicked(350, 350, False, False); shot('04_extrude')
+    w.tools['extrude'].click()
+    from unittest.mock import patch
+    with patch.object(w.view, 'pick_profile', return_value=w.document.bodies[0].id):
+        w.view_clicked(350, 350, False, False)
+    w.ex_value.setValue(20); settle(500); shot('04_extrude')
 run('04', s4)
 def s5():
-    w.ex_distance.setValue(20); w.apply_extrude(); settle(1500); w.view.set_view('iso'); w.view.fit_all(); shot('05_solid')
+    w.apply_extrude(); settle(1500); w.view.set_view('iso'); w.view.fit_all(); shot('05_solid')
 run('05', s5)
 def s6():
-    w.tools['mod'].click(); shot('06_mod')
+    from unittest.mock import patch
+    sid = w.document.bodies[-1].id
+    w.tools['mod'].click()
+    with patch.object(w.view, 'nearest_edge', return_value=(sid, 0)):
+        w.view_clicked(5, 5, False, False)
+    w.mod_size.setValue(4); settle(800); shot('06_mod')
 run('06', s6)
+def s7():
+    w.set_mode(None); w.tools['sketch'].click(); settle(300); shot('07_plane_pick_with_solid')
+run('07', s7)
 sys.exit(0)
