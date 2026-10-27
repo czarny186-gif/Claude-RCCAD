@@ -92,6 +92,8 @@ class StudioWindow(QMainWindow):
         self.points: list[tuple[float, float]] = []
         self.sketch_plane = None
         self.extrude_body_id = None
+        self.extrude_src = None
+        self._hv = None
         self.bool_ids: list[str] = []
         self.mirror_id = None
         self.mirror_face = None
@@ -109,12 +111,18 @@ class StudioWindow(QMainWindow):
         self.view.viewClicked.connect(self.view_clicked)
         self.view.viewHover.connect(self.view_hover)
         self.view.contextRequested.connect(self.context_menu)
+        self.view.handleDragged.connect(self.handle_dragged)
+        self.view.handleReleased.connect(self.handle_released)
         self._build_overlays()
         self.view.installEventFilter(self)
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
         self._preview_timer.setInterval(120)
         self._preview_timer.timeout.connect(self.update_extrude_preview)
+        self._mod_timer = QTimer(self)
+        self._mod_timer.setSingleShot(True)
+        self._mod_timer.setInterval(250)
+        self._mod_timer.timeout.connect(self.update_mod_preview)
         for seq, fn in (('Ctrl+Z', self.undo), ('Ctrl+Y', self.redo), ('Ctrl+Shift+Z', self.redo), ('Ctrl+S', self.save_project),
                         ('Ctrl+O', self.open_project), ('Ctrl+N', self.new_project), ('Delete', self.delete_selected)):
             QShortcut(QKeySequence(seq), self, activated=fn)
@@ -369,6 +377,8 @@ class StudioWindow(QMainWindow):
         lay.addWidget(_row('Operacja', self.mod_kind))
         self.mod_size = _spin(2, .001, 1e5)
         lay.addWidget(_row('Promień / odległość', self.mod_size))
+        self.mod_size.valueChanged.connect(lambda *_: self._mod_timer.start())
+        self.mod_kind.currentIndexChanged.connect(lambda *_: self._mod_timer.start())
         self.mod_status = QLabel('')
         self.mod_status.setObjectName('status')
         self.mod_status.setWordWrap(True)
@@ -533,6 +543,8 @@ class StudioWindow(QMainWindow):
         self.view.tints = {}
         self.sketch_plane = None
         self.extrude_body_id = None
+        self.extrude_src = None
+        self.view.set_handle(None, None)
         self.bool_ids = []
         self.mirror_id = None
         self.mirror_face = None
@@ -889,51 +901,108 @@ class StudioWindow(QMainWindow):
 
     def pick_profile(self, x, y):
         bid = self.view.pick_profile(x, y)
-        if bid is None:
-            self.toast('Tu nie ma zamkniętego profilu szkicu. Kliknij wewnątrz narysowanej figury.')
+        src = None
+        if bid is not None:
+            body = self.document.get(bid)
+            src = dict(kind='sketch', id=bid, wire=body.shape, normal=kernel.NORMALS[body.plane], center=body.shape.Center().toTuple())
+        else:
+            hit = self.view.pick_face(x, y)
+            body = self.document.get(hit[0]) if hit else None
+            if body is not None and body.kind == 'solid':
+                try:
+                    face, normal = kernel.face_at(body.shape, hit[1], hit[2])
+                    src = dict(kind='face', id=body.id, wire=face.outerWire(), normal=tuple(float(c) for c in normal), center=face.Center().toTuple())
+                except kernel.CadError as exc:
+                    self.toast(str(exc))
+                    return
+        if src is None:
+            self.toast('Kliknij zamknięty profil szkicu albo płaską ścianę bryły.')
             return
-        self.extrude_body_id = bid
+        self.extrude_body_id = src['id']
+        self.extrude_src = src
+        if src['kind'] == 'face':
+            self.fill_targets()
+            index = self.ex_target.findData(src['id'])
+            if index >= 0:
+                self.ex_target.setCurrentIndex(index)
+                self.ex_op.setCurrentIndex(1)
         self.ex_bar.show()
-        self.ex_status.setText('Profil wybrany. Ustaw odległość u góry i zatwierdź ✓.')
-        self.hint('Wyciągnięcie: ustaw odległość i naciśnij ✓ Zastosuj.')
+        self.ex_status.setText('Wybrano ' + ('profil szkicu' if src['kind'] == 'sketch' else 'ścianę bryły') + '. Przeciągnij strzałkę albo wpisz odległość u góry.')
+        self.hint('Wyciągnięcie: przeciągnij pomarańczową strzałkę lub wpisz odległość, potem ✓ Zastosuj.')
         self.ex_distance.setFocus()
         self.update_extrude_preview()
+        self.place_handle()
         self._layout_overlays()
 
-    def _extrude_tool(self):
-        body = self.document.get(self.extrude_body_id)
-        if body is None:
-            raise kernel.CadError('Wybierz profil szkicu.')
-        if self.ex_two.isChecked():
-            return kernel.extrude2(body.shape, body.plane, self.ex_distance.value(), self.ex_distance2.value())
-        return kernel.extrude(body.shape, body.plane, self.ex_distance.value(), self.ex_sym.isChecked())
+    def place_handle(self):
+        src = self.extrude_src
+        if src is None:
+            self.view.set_handle(None, None)
+            return
+        n = src['normal']
+        d = self.ex_distance.value()
+        tip = [src['center'][i] + n[i] * d for i in range(3)]
+        self.view.set_handle(tip, n)
+
+    def handle_dragged(self, delta):
+        if self.mode != 'extrude' or self.extrude_src is None:
+            return
+        if self._hv is None:
+            self._hv = self.ex_distance.value()
+        self.ex_distance.setValue(round(self._hv + delta, 1) or .1)
+
+    def handle_released(self):
+        self._hv = None
+        self.place_handle()
+
+    def _make_tool(self):
+        """Funkcja budująca narzędzie wyciągnięcia z bieżących ustawień (bezpieczna do wywołania w wątku roboczym)."""
+        src = self.extrude_src
+        if src is None:
+            raise kernel.CadError('Wybierz profil szkicu lub ścianę.')
+        d1, d2 = self.ex_distance.value(), self.ex_distance2.value()
+        sym, two = self.ex_sym.isChecked(), self.ex_two.isChecked()
+        wire, normal = src['wire'], src['normal']
+        if src['kind'] == 'sketch':
+            plane = self.document.get(src['id']).plane
+            return lambda: kernel.extrude2(wire, plane, d1, d2) if two else kernel.extrude(wire, plane, d1, sym)
+        return lambda: kernel.extrude_dir(wire, normal, d1, d2 if two else 0.0, sym)
 
     def update_extrude_preview(self):
-        if self.mode != 'extrude' or self.extrude_body_id is None:
+        if self.mode != 'extrude' or self.extrude_src is None:
             return
+        src = self.extrude_src
+        if src['kind'] == 'face' and self.ex_op.currentData() != 'new':
+            want = 'union' if self.ex_distance.value() >= 0 else 'subtract'
+            if self.ex_op.currentData() != want:
+                self.ex_op.blockSignals(True)
+                self.ex_op.setCurrentIndex(1 if want == 'union' else 2)
+                self.ex_op.blockSignals(False)
+                self.ex_target_row.setVisible(True)
+                self.ex_panel.adjustSize()
         try:
-            mesh = kernel.display_mesh(self._extrude_tool())
+            mesh = kernel.display_mesh(self._make_tool()())
         except Exception as exc:
             self.view.set_preview_mesh(None)
             self.ex_status.setText(str(exc))
             return
         color = (.95, .30, .25, .55) if self.ex_op.currentData() == 'subtract' else (.25, .55, .95, .55)
         self.view.set_preview_mesh(mesh, color=color)
+        if self._hv is None:
+            self.place_handle()
 
     def apply_extrude(self):
-        if self.busy or self.extrude_body_id is None:
+        if self.busy or self.extrude_src is None:
             return
-        body = self.document.get(self.extrude_body_id)
         op = self.ex_op.currentData()
         base = self.document.get(self.ex_target.currentData()) if op != 'new' else None
         if op != 'new' and base is None:
             self.toast('Wybierz bryłę docelową.')
             return
-        distance, symmetric = self.ex_distance.value(), self.ex_sym.isChecked()
-        two, d2 = self.ex_two.isChecked(), self.ex_distance2.value()
+        make = self._make_tool()
 
         def build():
-            tool = kernel.extrude2(body.shape, body.plane, distance, d2) if two else kernel.extrude(body.shape, body.plane, distance, symmetric)
+            tool = make()
             if base is None:
                 return [*self.document.bodies, Body('Wyciągnięcie', tool).prepared()]
             result = base.changed(kernel.boolean(op, base.shape, [tool]))
@@ -944,6 +1013,7 @@ class StudioWindow(QMainWindow):
             self.selected = [bodies[-1].id] if base is None else [base.id]
 
         self.view.set_preview_mesh(None)
+        self.view.set_handle(None, None)
         self.run_operation('Wyciąganie', build, apply, after=lambda: self.set_mode(None))
 
     # ---------- boolean ----------
@@ -1025,6 +1095,24 @@ class StudioWindow(QMainWindow):
         count = sum(len(v) for v in self.edges.values())
         self.mod_status.setText(f'Zaznaczone krawędzie: {count}' if count else 'Kliknij krawędź bryły w widoku 3D.')
         self.refresh()
+        self._mod_timer.start()
+
+    def update_mod_preview(self):
+        if self.mode != 'mod':
+            return
+        if len(self.edges) != 1 or not next(iter(self.edges.values()), None):
+            self.view.set_preview_mesh(None)
+            return
+        bid, ids = next(iter(self.edges.items()))
+        body = self.document.get(bid)
+        if body is None or len(body.shape.Faces()) > 300:
+            return
+        try:
+            mesh = kernel.display_mesh(kernel.blend(body.shape, set(ids), self.mod_size.value(), self.mod_kind.currentData()))
+            self.view.set_preview_mesh(mesh, color=(.2, .75, .45, .55), line_color=(.05, .4, .2, 1))
+        except Exception:
+            self.view.set_preview_mesh(None)
+            self.mod_status.setText(self.mod_status.text().split('\n')[0] + '\nTa wartość jest za duża dla wybranych krawędzi.')
 
     def clear_edges(self):
         self.edges = {}

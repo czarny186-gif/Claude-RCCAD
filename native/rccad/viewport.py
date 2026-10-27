@@ -40,6 +40,8 @@ class CadView(gl.GLViewWidget):
     bodyClicked = Signal(str, bool)
     selectionCleared = Signal()
     contextRequested = Signal(float, float)
+    handleDragged = Signal(float)   # przesunięcie uchwytu wyciągnięcia wzdłuż jego osi (mm)
+    handleReleased = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -92,6 +94,9 @@ class CadView(gl.GLViewWidget):
         self.click_mode = False       # True: studio (klik-klik), False: klasyczne okno (przeciąganie)
         self.tints = {}               # id bryły -> kolor RGBA (np. baza / narzędzia Boolean)
         self.preview_items = []
+        self.handle = None            # (punkt, kierunek) uchwytu-strzałki wyciągnięcia
+        self.handle_items = []
+        self._handle_drag = None
 
     def set_models(self, bodies, selected_bodies=(), selected_edges=None):
         self._set_hover_edge(None)
@@ -261,6 +266,35 @@ class CadView(gl.GLViewWidget):
                 self.preview_items.append(line)
         self.update()
 
+    def set_handle(self, tip, direction):
+        """Strzałka wyciągnięcia: grot w punkcie `tip`, oś `direction` (wersor). None usuwa uchwyt."""
+        for item in self.handle_items:
+            self.removeItem(item)
+        self.handle_items = []
+        self.handle = None
+        if tip is not None:
+            tip = np.asarray(tip, dtype=float)
+            d = np.asarray(direction, dtype=float)
+            d = d / np.linalg.norm(d)
+            size = float(self.opts['distance']) * .06
+            side = np.cross(d, (0, 0, 1) if abs(d[2]) < .9 else (1, 0, 0))
+            side = side / np.linalg.norm(side) * size * .45
+            other = np.cross(d, side)
+            base = tip - d * size
+            for pts in ([tip - d * size * 3, tip], [tip, base + side], [tip, base - side], [tip, base + other], [tip, base - other]):
+                line = gl.GLLinePlotItem(pos=np.array(pts, dtype=np.float32), color=(1, .45, .0, 1), width=4, antialias=True)
+                line.setDepthValue(10)
+                self.addItem(line)
+                self.handle_items.append(line)
+            self.handle = (tip, d)
+        self.update()
+
+    def _handle_screen(self):
+        tip, d = self.handle
+        length = float(self.opts['distance']) * .2
+        xy, _, _ = self.project_points(np.array([tip, tip + d * length]))
+        return xy[0], xy[1], length
+
     def pick_body(self, x, y):
         ray = self._ray(x, y)
         hit = self._hit(*ray) if ray else None
@@ -404,6 +438,15 @@ class CadView(gl.GLViewWidget):
     def mouseMoveEvent(self, event):
         pos = event.position()
         buttons = event.buttons()
+        if self._handle_drag is not None:
+            x0, y0, s0, s1, length = self._handle_drag
+            axis = np.asarray(s1) - np.asarray(s0)
+            norm2 = float(axis @ axis)
+            if norm2 > 1e-6:
+                moved = np.array([pos.x() - x0, pos.y() - y0])
+                self.handleDragged.emit(float(moved @ axis) / norm2 * length)
+            event.accept()
+            return
         if self._sk_start is not None and buttons & Qt.LeftButton:
             point = self.plane_point(self.sketch_plane, pos.x(), pos.y())
             if point:
@@ -469,12 +512,27 @@ class CadView(gl.GLViewWidget):
                 self._sk_start = self._snap(point, event)
                 event.accept()
                 return
+        if self.handle is not None and event.button() == Qt.LeftButton:
+            try:
+                s0, s1, length = self._handle_screen()
+                if np.hypot(event.position().x() - s0[0], event.position().y() - s0[1]) < 18:
+                    self._handle_drag = (event.position().x(), event.position().y(), s0, s1, length)
+                    self._press = None
+                    event.accept()
+                    return
+            except Exception:
+                pass
         if event.button() == Qt.RightButton or (event.button() == Qt.LeftButton and event.modifiers() & Qt.ShiftModifier):
             event.accept()  # przesuwanie widoku obsługujemy sami (prawy przycisk lub Shift + przeciąganie)
             return
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event):
+        if self._handle_drag is not None:
+            self._handle_drag = None
+            self.handleReleased.emit()
+            event.accept()
+            return
         if self._sk_start is not None:
             start, self._sk_start = self._sk_start, None
             self._press = None

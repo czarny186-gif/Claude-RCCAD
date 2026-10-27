@@ -174,6 +174,30 @@ class StudioTests(unittest.TestCase):
             f=os.path.join(d,'a.svg');open(f,'w').write('<svg xmlns="http://www.w3.org/2000/svg"><rect x="0" y="0" width="20" height="10"/><circle cx="5" cy="5" r="2"/><path d="M0 0 L10 0 L10 10 Z"/></svg>')
             self.assertEqual(len(k.svg_profiles(f)),3)
 
+    def test_extrude_face_of_solid_adds_and_cuts(self):
+        w=self.w;a=Body('A',k.box(20,20,20)).prepared();w.document.commit([a]);w.refresh();w.set_mode('extrude')
+        top=([0,0,1],[10,10,20])
+        with patch.object(w.view,'pick_profile',return_value=None),patch.object(w.view,'pick_face',return_value=(a.id,top[0],top[1])):
+            w.view_clicked(5,5,False,False)
+        self.assertIsNotNone(w.extrude_src);self.assertEqual(w.extrude_src['kind'],'face');self.assertIsNotNone(w.view.handle)
+        w.ex_distance.setValue(5);w.update_extrude_preview();self.assertEqual(w.ex_op.currentData(),'union')
+        w.apply_extrude();self.wait();self.assertAlmostEqual(w.document.get(a.id).shape.Volume(),20*20*25,1)
+        w.set_mode('extrude');b=w.document.get(a.id)
+        with patch.object(w.view,'pick_profile',return_value=None),patch.object(w.view,'pick_face',return_value=(a.id,[0,0,1],[10,10,25])):
+            w.view_clicked(5,5,False,False)
+        w.ex_distance.setValue(-3);w.update_extrude_preview();self.assertEqual(w.ex_op.currentData(),'subtract')
+        w.apply_extrude();self.wait();self.assertAlmostEqual(w.document.get(a.id).shape.Volume(),20*20*22,1)
+
+    def test_extrude_arrow_drag_changes_distance(self):
+        w=self.w;self.sketch('rect',(0,0),(10,10));w.set_mode('extrude');sk=w.document.bodies[0]
+        with patch.object(w.view,'pick_profile',return_value=sk.id):w.view_clicked(1,1,False,False)
+        w.ex_distance.setValue(10);w.handle_dragged(5.04);self.assertAlmostEqual(w.ex_distance.value(),15.0,1)
+        w.handle_dragged(-2.0);self.assertAlmostEqual(w.ex_distance.value(),8.0,1);w.handle_released();self.assertIsNone(w._hv)
+
+    def test_fillet_preview_shows_result(self):
+        w=self.w;a=Body('A',k.box(20,20,20)).prepared();w.document.commit([a]);w.refresh();w.set_mode('mod')
+        w.edges={a.id:{0}};w.mod_size.setValue(2);w.update_mod_preview();self.assertTrue(w.view.preview_items)
+
 
 if __name__=='__main__':
     unittest.main()

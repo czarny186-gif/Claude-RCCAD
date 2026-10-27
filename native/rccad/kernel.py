@@ -545,3 +545,34 @@ def svg_profiles(path, plane="XY"):
     if not out:
         raise CadError("W pliku SVG nie znaleziono obsługiwanych kształtów (prostokąt, okrąg, elipsa, wielokąt, ścieżka z liniami).")
     return out
+
+
+def extrude_dir(wire, normal, d1, d2=0.0, symmetric=False):
+    """Wyciągnięcie wzdłuż dowolnej normalnej (np. ściany bryły). d1 > 0 po normalnej, d1 < 0 przeciwnie."""
+    d1, d2 = float(d1), float(d2)
+    n = np.asarray(normal, dtype=float)
+    n = n / np.linalg.norm(n)
+    nv = cq.Vector(*[float(x) for x in n])
+    if symmetric:
+        base, total = wire.translate(nv.multiply(-d1 / 2)), d1
+    else:
+        base, total = wire.translate(nv.multiply(-d2)) if d2 else wire, d1 + d2
+    if not isfinite(total) or abs(total) < 1e-5:
+        raise CadError("Odległość wyciągnięcia musi być różna od zera.")
+    if not base.IsClosed():
+        raise CadError("Profil musi być zamknięty.")
+    return valid(cq.Solid.extrudeLinear(base, [], nv.multiply(total)))
+
+
+def face_at(shape, normal, point, tol=1e-3):
+    """Płaska ściana bryły o danej normalnej zawierająca punkt (do wyciągania ścian)."""
+    n = np.asarray(normal, dtype=float)
+    n = n / np.linalg.norm(n)
+    vertex = cq.Vertex.makeVertex(*[float(x) for x in point])
+    for face in shape.Faces():
+        if face.geomType() != "PLANE":
+            continue
+        fn = np.array(face.normalAt().toTuple())
+        if abs(float(fn @ n)) > .999 and face.distance(vertex) < max(tol, 1e-3):
+            return face, fn
+    raise CadError("Wskazana ściana nie jest płaska.")
