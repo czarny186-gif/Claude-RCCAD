@@ -9,7 +9,7 @@ import tempfile
 import uuid
 from zipfile import ZipFile, ZIP_DEFLATED
 import cadquery as cq
-from .kernel import CadError, DisplayMesh, display_mesh, valid
+from .kernel import CadError, DisplayMesh, Frame, display_mesh, valid
 
 
 @dataclass(frozen=True)
@@ -17,7 +17,7 @@ class Body:
     name: str
     shape: cq.Shape = field(compare=False, repr=False)
     kind: str = "solid"
-    plane: str = "XY"
+    plane: object = "XY"   # 'XY' / 'XZ' / 'YZ' albo kernel.Frame (szkic na ścianie)
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
     visible: bool = True
     mesh: DisplayMesh | None = field(default=None, compare=False, repr=False)
@@ -88,7 +88,11 @@ class Document:
                     cq.exporters.export(body.shape, str(source), exportType="BREP")
                     member = f"bodies/{body.id}.brep"
                     archive.write(source, member)
-                    manifest['bodies'].append(dict(id=body.id, name=body.name, kind=body.kind, plane=body.plane, visible=body.visible, file=member))
+                    entry = dict(id=body.id, name=body.name, kind=body.kind, plane=body.plane, visible=body.visible, file=member)
+                    if isinstance(body.plane, Frame):
+                        entry['plane'] = 'CUSTOM'
+                        entry['frame'] = body.plane.to_dict()
+                    manifest['bodies'].append(entry)
                 archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False))
             os.replace(temp_path, path)
             self.path = path
@@ -117,7 +121,9 @@ class Document:
                         raise CadError("Nieprawidłowa struktura projektu.")
                     kind = item.get('kind', 'solid')
                     plane = item.get('plane', 'XY')
-                    if kind not in ('solid', 'mesh', 'sketch') or plane not in ('XY', 'XZ', 'YZ'):
+                    if plane == 'CUSTOM' and kind == 'sketch':
+                        plane = Frame.from_dict(item['frame'])
+                    if kind not in ('solid', 'mesh', 'sketch') or not (isinstance(plane, Frame) or plane in ('XY', 'XZ', 'YZ')):
                         raise CadError("Nieprawidłowy typ obiektu lub płaszczyzna.")
                     ids.add(identifier)
                     source = Path(work) / (identifier + '.brep')

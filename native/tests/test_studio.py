@@ -1,5 +1,6 @@
 """Okno Studio: układ jak w HTML oraz przepływ szkic → wyciągnięcie → Boolean / zaokrąglenie / lustro."""
-import os
+import os, faulthandler
+faulthandler.dump_traceback_later(420, exit=True, file=open(os.environ.get("DIAG_FILE","diag_hang.txt"),"w"))
 os.environ.setdefault('QT_QPA_PLATFORM','offscreen' if not os.environ.get('DISPLAY') and os.name!='nt' else '')
 import time
 import unittest

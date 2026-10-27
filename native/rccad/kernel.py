@@ -48,32 +48,102 @@ def cylinder(radius, height):
 
 
 def sketch(kind, plane, width, height=0, x=0, y=0, sides=6):
-    if plane not in ("XY", "XZ", "YZ"):
+    if not plane_ok(plane):
         raise CadError("Nieznana płaszczyzna szkicu.")
-    wp = cq.Workplane(plane).center(float(x), float(y))
+    wp_ = wp(plane).center(float(x), float(y))
     width = positive(width)
     if kind == "rectangle":
-        return wp.rect(width, positive(height)).wire().val()
+        return wp_.rect(width, positive(height)).wire().val()
     if kind == "circle":
-        return wp.circle(width / 2).wire().val()
+        return wp_.circle(width / 2).wire().val()
     if kind == "polygon":
         if not 3 <= int(sides) <= 128:
             raise CadError("Wielokąt musi mieć od 3 do 128 boków.")
-        return wp.polygon(int(sides), width).wire().val()
+        return wp_.polygon(int(sides), width).wire().val()
     raise CadError("Nieznany typ szkicu.")
 
 
 PLANE_AXES = {"XY": (0, 1), "XZ": (0, 2), "YZ": (1, 2)}
 
 
+@dataclass(frozen=True)
+class Frame:
+    """Dowolna płaszczyzna szkicu (np. ściana bryły): początek, oś U (xdir) i normalna; oś V = normalna × U."""
+    origin: tuple
+    xdir: tuple
+    normal: tuple
+
+    @property
+    def ydir(self):
+        n, x = np.array(self.normal, float), np.array(self.xdir, float)
+        return tuple(float(c) for c in np.cross(n, x))
+
+    def to_dict(self):
+        return dict(origin=list(self.origin), xdir=list(self.xdir), normal=list(self.normal))
+
+    @staticmethod
+    def from_dict(d):
+        def v3(x):
+            t = tuple(float(c) for c in x)
+            if len(t) != 3 or not all(isfinite(c) for c in t):
+                raise CadError("Nieprawidłowa płaszczyzna szkicu.")
+            return t
+        f = Frame(v3(d["origin"]), v3(d["xdir"]), v3(d["normal"]))
+        if abs(float(np.dot(f.xdir, f.normal))) > 1e-6 or abs(float(np.linalg.norm(f.normal)) - 1) > 1e-6 or abs(float(np.linalg.norm(f.xdir)) - 1) > 1e-6:
+            raise CadError("Nieprawidłowa płaszczyzna szkicu.")
+        return f
+
+
+STANDARD = {
+    "XY": Frame((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 0.0, 1.0)),
+    "XZ": Frame((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, -1.0, 0.0)),
+    "YZ": Frame((0.0, 0.0, 0.0), (0.0, 1.0, 0.0), (1.0, 0.0, 0.0)),
+}
+
+
+def plane_ok(plane):
+    return isinstance(plane, Frame) or plane in STANDARD
+
+
+def frame_of(plane):
+    if isinstance(plane, Frame):
+        return plane
+    if plane not in STANDARD:
+        raise CadError("Nieznana płaszczyzna szkicu.")
+    return STANDARD[plane]
+
+
+def wp(plane):
+    f = frame_of(plane)
+    return cq.Workplane(cq.Plane(origin=f.origin, xDir=f.xdir, normal=f.normal))
+
+
+def face_frame(origin, normal):
+    """Płaszczyzna szkicu na ścianie: U poziomo (wzdłuż osi Z × normalna), a dla ścian poziomych wzdłuż X."""
+    n = np.array(normal, float)
+    n = n / np.linalg.norm(n)
+    x = np.array([1.0, 0, 0]) if abs(n[2]) > .9 else np.cross([0, 0, 1.0], n)
+    x = x / np.linalg.norm(x)
+    r = lambda a: tuple(round(float(c), 12) for c in a)
+    return Frame(r(origin), r(x), r(n))
+
+
+def uv_of(plane, point):
+    f = frame_of(plane)
+    d = np.array(point, float) - np.array(f.origin, float)
+    return float(d @ np.array(f.xdir)), float(d @ np.array(f.ydir))
+
+
 def to_world(plane, u, v):
-    """Współrzędne szkicu (U, V) -> punkt 3D; zgodne z cq.Workplane('XY'/'XZ'/'YZ')."""
-    return {"XY": (u, v, 0.0), "XZ": (u, 0.0, v), "YZ": (0.0, u, v)}[plane]
+    """Współrzędne szkicu (U, V) -> punkt 3D (dla XY/XZ/YZ zgodne z cq.Workplane)."""
+    f = frame_of(plane)
+    p = np.array(f.origin) + np.array(f.xdir) * u + np.array(f.ydir) * v
+    return float(p[0]), float(p[1]), float(p[2])
 
 
 def sketch_from_drag(kind, plane, u0, v0, u1, v1, sides=6):
     """Argumenty dla sketch() z przeciągnięcia myszą: prostokąt = dwa rogi, okrąg i wielokąt = środek i punkt na obwodzie."""
-    if plane not in PLANE_AXES:
+    if not plane_ok(plane):
         raise CadError("Nieznana płaszczyzna szkicu.")
     u0, v0, u1, v1 = (float(x) for x in (u0, v0, u1, v1))
     if not all(isfinite(x) for x in (u0, v0, u1, v1)):
@@ -132,7 +202,7 @@ def sketch_shape(kind, plane, points, sides=5):
     circle2: końce średnicy; circle3: trzy punkty; ellipse: środek i narożnik opisanego prostokąta;
     slot: oba środki końców i punkt określający szerokość; polygon: środek i wierzchołek.
     """
-    if plane not in PLANE_AXES:
+    if not plane_ok(plane):
         raise CadError("Nieznana płaszczyzna szkicu.")
     pts = [(float(u), float(v)) for u, v in points]
     need = {"rect": 2, "centerRect": 2, "circle": 2, "circle2": 2, "circle3": 3, "ellipse": 2, "slot": 3, "polygon": 2}
@@ -151,13 +221,13 @@ def sketch_shape(kind, plane, points, sides=5):
         return sketch(**sketch_from_drag("circle", plane, *pts[0], *pts[1]))
     if kind == "polygon":
         return sketch(**sketch_from_drag("polygon", plane, *pts[0], *pts[1], sides=sides))
-    wp = cq.Workplane(plane)
+    wp_ = wp(plane)
     if kind == "circle2":
         (a, b) = pts[:2]
         d = dist(a, b)
         if d < tiny:
             raise CadError("Okrąg jest za mały.")
-        return wp.center((a[0] + b[0]) / 2, (a[1] + b[1]) / 2).circle(d / 2).wire().val()
+        return wp_.center((a[0] + b[0]) / 2, (a[1] + b[1]) / 2).circle(d / 2).wire().val()
     if kind == "circle3":
         (ax, ay), (bx, by), (cx, cy) = pts[:3]
         d = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by))
@@ -165,13 +235,13 @@ def sketch_shape(kind, plane, points, sides=5):
             raise CadError("Trzy punkty leżą na jednej prostej - nie wyznaczają okręgu.")
         ux = ((ax**2 + ay**2) * (by - cy) + (bx**2 + by**2) * (cy - ay) + (cx**2 + cy**2) * (ay - by)) / d
         uy = ((ax**2 + ay**2) * (cx - bx) + (bx**2 + by**2) * (ax - cx) + (cx**2 + cy**2) * (bx - ax)) / d
-        return wp.center(ux, uy).circle(float(np.hypot(ax - ux, ay - uy))).wire().val()
+        return wp_.center(ux, uy).circle(float(np.hypot(ax - ux, ay - uy))).wire().val()
     if kind == "ellipse":
         (cx, cy), (ex, ey) = pts[:2]
         rx, ry = abs(ex - cx), abs(ey - cy)
         if rx < tiny or ry < tiny:
             raise CadError("Elipsa jest za mała.")
-        return wp.center(cx, cy).ellipse(rx, ry).wire().val()
+        return wp_.center(cx, cy).ellipse(rx, ry).wire().val()
     # slot: dwa środki końców i punkt szerokości (odległość od osi = promień zaokrąglenia)
     (ax, ay), (bx, by), (wx, wy) = pts[:3]
     length = dist((ax, ay), (bx, by))
@@ -182,7 +252,7 @@ def sketch_shape(kind, plane, points, sides=5):
     if radius < tiny:
         raise CadError("Szczelina jest za wąska.")
     angle = float(np.degrees(np.arctan2(by - ay, bx - ax)))
-    return wp.center((ax + bx) / 2, (ay + by) / 2).slot2D(length + 2 * radius, 2 * radius, angle).wire().val()
+    return wp_.center((ax + bx) / 2, (ay + by) / 2).slot2D(length + 2 * radius, 2 * radius, angle).wire().val()
 
 
 def mirror_plane(shape, normal, origin):
@@ -202,7 +272,7 @@ def extrude(wire, plane, distance, symmetric=False):
     distance = float(distance)
     if not isfinite(distance) or abs(distance) < 1e-5:
         raise CadError("Odległość wyciągnięcia musi być różna od zera.")
-    normal = cq.Vector(NORMALS[plane]).multiply(distance)
+    normal = cq.Vector(*frame_of(plane).normal).multiply(distance)
     base = wire.translate(normal.multiply(-.5)) if symmetric else wire
     if not base.IsClosed():
         raise CadError("Profil musi być zamknięty.")
@@ -362,7 +432,7 @@ def _vec(plane, p):
 
 def polyline(plane, points, closed=False):
     """Łamana (lub zamknięty wielokąt) z punktów (U, V)."""
-    if plane not in PLANE_AXES:
+    if not plane_ok(plane):
         raise CadError("Nieznana płaszczyzna szkicu.")
     pts = [(float(u), float(v)) for u, v in points]
     clean = [pts[0]]
@@ -401,14 +471,11 @@ def rect3(plane, points):
 
 
 def point_marker(plane, p, size=.6):
-    return cq.Workplane(plane).center(float(p[0]), float(p[1])).circle(size).wire().val()
+    return wp(plane).center(float(p[0]), float(p[1])).circle(size).wire().val()
 
 
 def _line_uv(edge, plane):
-    i, j = PLANE_AXES[plane]
-    a, b = edge.startPoint(), edge.endPoint()
-    pa, pb = (a.toTuple()[i], a.toTuple()[j]), (b.toTuple()[i], b.toTuple()[j])
-    return pa, pb
+    return uv_of(plane, edge.startPoint().toTuple()), uv_of(plane, edge.endPoint().toTuple())
 
 
 def circle_tangent2(plane, line1, line2, hint):
@@ -442,7 +509,7 @@ def circle_tangent2(plane, line1, line2, hint):
             best = (gap, cx, cy, dist)
     if best is None:
         raise CadError("Nie można wyznaczyć okręgu stycznego.")
-    return cq.Workplane(plane).center(best[1], best[2]).circle(best[3]).wire().val()
+    return wp(plane).center(best[1], best[2]).circle(best[3]).wire().val()
 
 
 def text_shape(plane, text, u, v, size=10.0):
@@ -450,10 +517,11 @@ def text_shape(plane, text, u, v, size=10.0):
     text = str(text).strip()
     if not text:
         raise CadError("Wpisz treść tekstu.")
-    solid = cq.Workplane(plane).center(float(u), float(v)).text(text, float(size), 0.2, combine=False).val()
-    axis = {"XY": 2, "XZ": 1, "YZ": 0}[plane]
+    solid = wp(plane).center(float(u), float(v)).text(text, float(size), 0.2, combine=False).val()
+    fr = frame_of(plane)
+    n0, o0 = np.array(fr.normal), np.array(fr.origin)
     wires = [f.outerWire() for f in (solid.Faces() if solid is not None else [])
-             if abs(f.Center().toTuple()[axis]) < 1e-5 and abs(abs(f.normalAt().toTuple()[axis]) - 1) < 1e-3]
+             if abs(float((np.array(f.Center().toTuple()) - o0) @ n0)) < 1e-5 and abs(abs(float(np.array(f.normalAt().toTuple()) @ n0)) - 1) < 1e-3]
     if not wires:
         raise CadError("Nie udało się utworzyć tekstu (brak czcionki).")
     return wires
@@ -464,7 +532,7 @@ def extrude2(wire, plane, d1, d2):
     d1, d2 = float(d1), float(d2)
     if not isfinite(d1) or not isfinite(d2) or d1 < 0 or d2 < 0 or d1 + d2 < 1e-5:
         raise CadError("Obie odległości muszą być nieujemne, a ich suma większa od zera.")
-    n = cq.Vector(NORMALS[plane])
+    n = cq.Vector(*frame_of(plane).normal)
     base = wire.translate(n.multiply(-d2))
     if not base.IsClosed():
         raise CadError("Profil musi być zamknięty.")
@@ -504,9 +572,9 @@ def svg_profiles(path, plane="XY"):
                 x, y, w, h = g("x"), g("y"), g("width"), g("height")
                 out.append(polyline(plane, [flip(p) for p in [(x, y), (x + w, y), (x + w, y + h), (x, y + h)]], True))
             elif tag == "circle":
-                out.append(cq.Workplane(plane).center(g("cx"), -g("cy")).circle(g("r")).wire().val())
+                out.append(wp(plane).center(g("cx"), -g("cy")).circle(g("r")).wire().val())
             elif tag == "ellipse":
-                out.append(cq.Workplane(plane).center(g("cx"), -g("cy")).ellipse(g("rx"), g("ry")).wire().val())
+                out.append(wp(plane).center(g("cx"), -g("cy")).ellipse(g("rx"), g("ry")).wire().val())
             elif tag in ("polygon", "polyline"):
                 n = num(el.get("points"))
                 pts = [flip((n[i], n[i + 1])) for i in range(0, len(n) - 1, 2)]
