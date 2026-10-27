@@ -82,12 +82,12 @@ jobs:
           GH_REPO: ${{ github.repository }}
         shell: bash
         run: |
-          release_tag="desktop-v0.2.0-${GITHUB_RUN_NUMBER}"
+          release_tag="desktop-v0.4.0-${GITHUB_RUN_NUMBER}"
           if gh release view "$release_tag" >/dev/null 2>&1; then
             gh release upload "$release_tag" release/*.zip --clobber
           else
             gh release create "$release_tag" release/*.zip \
               --target "$GITHUB_SHA" --prerelease \
-              --title "RCCAD Desktop 0.2 — Windows x64" \
+              --title "RCCAD Desktop 0.4 (Studio) — Windows x64" \
               --notes-file native/RELEASE_NOTES.md
           fi

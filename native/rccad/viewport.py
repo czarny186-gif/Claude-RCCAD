@@ -32,6 +32,11 @@ class CadView(gl.GLViewWidget):
     planeClicked = Signal(str)
     sketchDrawn = Signal(str, str, float, float, float, float)
     sketchInfo = Signal(str)
+    # tryb "studio" (jak HTML): klik-klik na płaszczyźnie szkicu i ogólne kliknięcia / ruch kursora
+    sketchMoved = Signal(str, float, float)
+    sketchClicked = Signal(str, float, float)
+    viewClicked = Signal(float, float, bool, bool)  # x, y, Shift, Ctrl
+    viewHover = Signal(float, float)
     bodyClicked = Signal(str, bool)
     selectionCleared = Signal()
 
@@ -83,6 +88,9 @@ class CadView(gl.GLViewWidget):
         self._hover_time = 0.0
         self.plane_items = {}
         self._build_planes()
+        self.click_mode = False       # True: studio (klik-klik), False: klasyczne okno (przeciąganie)
+        self.tints = {}               # id bryły -> kolor RGBA (np. baza / narzędzia Boolean)
+        self.preview_items = []
 
     def set_models(self, bodies, selected_bodies=(), selected_edges=None):
         self._set_hover_edge(None)
@@ -96,7 +104,7 @@ class CadView(gl.GLViewWidget):
             if not body.visible or body.mesh is None:
                 continue
             mesh = body.mesh
-            color = SOLID_SELECTED if body.id in self.selected_bodies else SOLID_COLOR
+            color = self.tints.get(body.id) or (SOLID_SELECTED if body.id in self.selected_bodies else SOLID_COLOR)
             if len(mesh.triangles):
                 item = gl.GLMeshItem(vertexes=mesh.vertices, faces=mesh.triangles, smooth=True, color=color, shader='rccad', drawEdges=False)
                 item.setGLOptions('opaque')
@@ -235,6 +243,80 @@ class CadView(gl.GLViewWidget):
                 self.addItem(self._hover_item)
         self.update()
 
+    # ---------- podglądy i wybieranie (studio) ----------
+    def set_preview_mesh(self, mesh, color=(.25, .55, .95, .55), line_color=(.1, .25, .5, 1), width=1.5):
+        for item in self.preview_items:
+            self.removeItem(item)
+        self.preview_items = []
+        if mesh is not None:
+            if len(mesh.triangles):
+                item = gl.GLMeshItem(vertexes=mesh.vertices, faces=mesh.triangles, smooth=False, color=color, drawEdges=False)
+                item.setGLOptions('translucent')
+                self.addItem(item)
+                self.preview_items.append(item)
+            for points in mesh.edges.values():
+                line = gl.GLLinePlotItem(pos=points, color=line_color, width=width, antialias=True)
+                self.addItem(line)
+                self.preview_items.append(line)
+        self.update()
+
+    def pick_body(self, x, y):
+        ray = self._ray(x, y)
+        hit = self._hit(*ray) if ray else None
+        return hit[1] if hit else None
+
+    def pick_face(self, x, y):
+        """Zwraca (id bryły, normalna, punkt) dla trójkąta pod kursorem albo None."""
+        ray = self._ray(x, y)
+        if ray is None:
+            return None
+        origin, direction = ray
+        best = None
+        for body in self.bodies:
+            if not body.visible or not body.mesh or not len(body.mesh.triangles):
+                continue
+            tri = body.mesh.vertices[body.mesh.triangles]
+            e1, e2 = tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0]
+            h = np.cross(np.broadcast_to(direction, e2.shape), e2)
+            a = np.einsum('ij,ij->i', e1, h)
+            f = np.divide(1., a, out=np.zeros_like(a), where=np.abs(a) > 1e-9)
+            sv = origin - tri[:, 0]
+            u = f * np.einsum('ij,ij->i', sv, h)
+            q = np.cross(sv, e1)
+            v = f * np.einsum('j,ij->i', direction, q)
+            t = f * np.einsum('ij,ij->i', e2, q)
+            ok = (np.abs(a) > 1e-9) & (u >= -1e-6) & (v >= -1e-6) & (u + v <= 1 + 1e-6) & (t > 1e-6)
+            if ok.any():
+                idx = np.where(ok)[0][int(np.argmin(t[ok]))]
+                if best is None or t[idx] < best[0]:
+                    n = np.cross(e1[idx], e2[idx])
+                    n = n / max(np.linalg.norm(n), 1e-12)
+                    best = (float(t[idx]), body.id, n, origin + direction * t[idx])
+        return None if best is None else (best[1], best[2], best[3])
+
+    def pick_profile(self, x, y):
+        """Identyfikator szkicu, którego zamknięty obrys obejmuje punkt pod kursorem."""
+        best = None
+        for body in self.bodies:
+            if body.kind != 'sketch' or not body.visible or not body.mesh:
+                continue
+            hit = self._plane_hit(body.plane, x, y)
+            if not hit:
+                continue
+            i, j = kernel.PLANE_AXES[body.plane]
+            px, py = float(hit[1][i]), float(hit[1][j])
+            crossings = 0
+            for points in body.mesh.edges.values():
+                a, b = points[:-1], points[1:]
+                ax, ay, bx, by = a[:, i], a[:, j], b[:, i], b[:, j]
+                straddle = (ay > py) != (by > py)
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    xc = ax + (py - ay) * (bx - ax) / (by - ay)
+                crossings += int(np.count_nonzero(straddle & (xc > px)))
+            if crossings % 2 == 1 and (best is None or hit[0] < best[0]):
+                best = (hit[0], body.id)
+        return best[1] if best else None
+
     def camera_matrix(self):
         viewport = (0, 0, max(1,self.width()), max(1,self.height()))
         return self.projectionMatrix(viewport,viewport) * self.viewMatrix()
@@ -355,10 +437,19 @@ class CadView(gl.GLViewWidget):
 
     def _hover(self, pos):
         now = time.monotonic()
-        if now - self._hover_time < .06:
+        if now - self._hover_time < .04:
             return
         self._hover_time = now
         try:
+            if self.click_mode and not self.plane_pick:
+                if self.sketch_plane and self.sketch_tool:
+                    point = self.plane_point(self.sketch_plane, pos.x(), pos.y())
+                    if point:
+                        u, v = self._snap(point)
+                        self.sketchMoved.emit(self.sketch_plane, u, v)
+                else:
+                    self.viewHover.emit(pos.x(), pos.y())
+                return
             if self.plane_pick:
                 self._highlight_plane(self.plane_at(pos.x(), pos.y()))
                 self.setCursor(Qt.PointingHandCursor if self._hover_plane else Qt.ArrowCursor)
@@ -370,7 +461,7 @@ class CadView(gl.GLViewWidget):
     def mousePressEvent(self, event):
         self._drag_position = event.position()
         self._press = (event.position().x(), event.position().y(), event.button())
-        if (self.sketch_plane and self.sketch_tool and event.button() == Qt.LeftButton
+        if (not self.click_mode and self.sketch_plane and self.sketch_tool and event.button() == Qt.LeftButton
                 and not event.modifiers() & Qt.ShiftModifier):
             point = self.plane_point(self.sketch_plane, event.position().x(), event.position().y())
             if point:
@@ -405,6 +496,16 @@ class CadView(gl.GLViewWidget):
             name = self.plane_at(x, y)
             if name:
                 self.planeClicked.emit(name)
+            return
+        if self.click_mode:
+            if self.sketch_plane and self.sketch_tool:
+                point = self.plane_point(self.sketch_plane, x, y)
+                if point:
+                    u, v = self._snap(point, event)
+                    self.sketchClicked.emit(self.sketch_plane, u, v)
+                return
+            if self.mouse_mode == 'select':
+                self.viewClicked.emit(x, y, bool(event.modifiers() & Qt.ShiftModifier), bool(event.modifiers() & Qt.ControlModifier))
             return
         if self.mouse_mode != "select" or self.sketch_plane:
             return

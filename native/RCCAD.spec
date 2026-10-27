@@ -7,6 +7,7 @@ root = Path(SPECPATH)
 datas = collect_data_files('cadquery')
 for package in ['cadquery','cadquery-ocp','PySide6-Essentials','shiboken6','numpy','pyqtgraph','PyOpenGL','vtk']:
     datas += copy_metadata(package, recursive=True)
+datas += [(str(root/'rccad'/'assets'), 'rccad/assets')]
 binaries = collect_dynamic_libs('OCP')
 if sys.platform == 'win32':
     datas, binaries = collect_delvewheel_libs_directory('OCP', libdir_name='cadquery_ocp.libs', datas=datas, binaries=binaries)

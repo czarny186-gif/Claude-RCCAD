@@ -59,6 +59,19 @@ def run(report_path=None):
     window.document._saved_revision=window.document._revision
     window.close();app.processEvents()
     checks.append('Qt native window, object tree and properties')
+    from .studio import StudioWindow
+    studio=StudioWindow();studio.resize(1400,850);studio.show();app.processEvents()
+    assert all(not b.icon().isNull() for b in studio.tools.values()) and studio.shape_buttons
+    studio.set_mode('plane');studio.plane_picked('XY')
+    for point in ((0,0),(20,10)):studio.sketch_clicked('XY',*point)
+    import time
+    end=time.monotonic()+15
+    while studio.busy and time.monotonic()<end:app.processEvents();time.sleep(.005)
+    app.processEvents()
+    assert len(studio.document.bodies)==1 and studio.document.bodies[0].kind=='sketch'
+    studio.document._saved_revision=studio.document._revision
+    studio.close();app.processEvents()
+    checks.append('Studio window (HTML layout), icons and click-click sketch')
     result=dict(app='RCCAD Desktop',version=__version__,platform=platform.platform(),passed=True,checks=checks)
     if report_path:
         Path(report_path).write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')

@@ -125,6 +125,76 @@ def edge_chain(shape, index, max_angle=8.0):
     return chain
 
 
+def sketch_shape(kind, plane, points, sides=5):
+    """Zamknięty profil szkicu z punktów klikniętych w (U, V) - jak w wersji HTML.
+
+    rect: dwa narożniki; centerRect: środek i narożnik; circle: środek i punkt na okręgu;
+    circle2: końce średnicy; circle3: trzy punkty; ellipse: środek i narożnik opisanego prostokąta;
+    slot: oba środki końców i punkt określający szerokość; polygon: środek i wierzchołek.
+    """
+    if plane not in PLANE_AXES:
+        raise CadError("Nieznana płaszczyzna szkicu.")
+    pts = [(float(u), float(v)) for u, v in points]
+    need = {"rect": 2, "centerRect": 2, "circle": 2, "circle2": 2, "circle3": 3, "ellipse": 2, "slot": 3, "polygon": 2}
+    if kind not in need:
+        raise CadError("Nieznany typ szkicu.")
+    if len(pts) < need[kind] or not all(isfinite(c) for p in pts for c in p):
+        raise CadError("Za mało punktów szkicu.")
+    dist = lambda a, b: float(np.hypot(a[0] - b[0], a[1] - b[1]))
+    tiny = 1e-4
+    if kind in ("rect", "centerRect"):
+        (u0, v0), (u1, v1) = pts[:2]
+        if kind == "centerRect":
+            u0, v0, u1, v1 = 2 * u0 - u1, 2 * v0 - v1, u1, v1
+        return sketch(**sketch_from_drag("rectangle", plane, u0, v0, u1, v1))
+    if kind == "circle":
+        return sketch(**sketch_from_drag("circle", plane, *pts[0], *pts[1]))
+    if kind == "polygon":
+        return sketch(**sketch_from_drag("polygon", plane, *pts[0], *pts[1], sides=sides))
+    wp = cq.Workplane(plane)
+    if kind == "circle2":
+        (a, b) = pts[:2]
+        d = dist(a, b)
+        if d < tiny:
+            raise CadError("Okrąg jest za mały.")
+        return wp.center((a[0] + b[0]) / 2, (a[1] + b[1]) / 2).circle(d / 2).wire().val()
+    if kind == "circle3":
+        (ax, ay), (bx, by), (cx, cy) = pts[:3]
+        d = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by))
+        if abs(d) < 1e-9:
+            raise CadError("Trzy punkty leżą na jednej prostej - nie wyznaczają okręgu.")
+        ux = ((ax**2 + ay**2) * (by - cy) + (bx**2 + by**2) * (cy - ay) + (cx**2 + cy**2) * (ay - by)) / d
+        uy = ((ax**2 + ay**2) * (cx - bx) + (bx**2 + by**2) * (ax - cx) + (cx**2 + cy**2) * (bx - ax)) / d
+        return wp.center(ux, uy).circle(float(np.hypot(ax - ux, ay - uy))).wire().val()
+    if kind == "ellipse":
+        (cx, cy), (ex, ey) = pts[:2]
+        rx, ry = abs(ex - cx), abs(ey - cy)
+        if rx < tiny or ry < tiny:
+            raise CadError("Elipsa jest za mała.")
+        return wp.center(cx, cy).ellipse(rx, ry).wire().val()
+    # slot: dwa środki końców i punkt szerokości (odległość od osi = promień zaokrąglenia)
+    (ax, ay), (bx, by), (wx, wy) = pts[:3]
+    length = dist((ax, ay), (bx, by))
+    if length < tiny:
+        raise CadError("Szczelina jest za krótka.")
+    ux, uy = (bx - ax) / length, (by - ay) / length
+    radius = abs((wx - ax) * -uy + (wy - ay) * ux)
+    if radius < tiny:
+        raise CadError("Szczelina jest za wąska.")
+    angle = float(np.degrees(np.arctan2(by - ay, bx - ax)))
+    return wp.center((ax + bx) / 2, (ay + by) / 2).slot2D(length + 2 * radius, 2 * radius, angle).wire().val()
+
+
+def mirror_plane(shape, normal, origin):
+    """Odbicie względem dowolnej płaszczyzny (np. wskazanej ściany)."""
+    n = np.asarray(normal, dtype=float)
+    length = float(np.linalg.norm(n))
+    if length < 1e-9:
+        raise CadError("Nieprawidłowa płaszczyzna odbicia.")
+    n /= length
+    return valid(shape.mirror(tuple(float(x) for x in n), tuple(float(x) for x in origin)), bool(shape.Solids()))
+
+
 NORMALS = {"XY": (0, 0, 1), "XZ": (0, -1, 0), "YZ": (1, 0, 0)}
 
 

@@ -1,0 +1,135 @@
+[
+ {
+  "shape": "line",
+  "title": "Linia — kliknij dwa punkty",
+  "svg": "<svg viewBox=\"0 0 32 32\"><path d=\"M5 26L26 5\"></path><circle cx=\"5\" cy=\"26\" r=\"2\"></circle><circle cx=\"26\" cy=\"5\" r=\"2\"></circle></svg>",
+  "group": null,
+  "variant": false
+ },
+ {
+  "shape": "rect",
+  "title": "Prostokąt — wybierz wariant strzałką",
+  "svg": "<svg viewBox=\"0 0 32 32\"><rect x=\"5\" y=\"7\" width=\"22\" height=\"18\" rx=\"1\"></rect></svg>",
+  "group": "rect",
+  "variant": false
+ },
+ {
+  "shape": "rect",
+  "title": "Prostokąt z dwóch narożników",
+  "svg": null,
+  "group": "rect",
+  "variant": true
+ },
+ {
+  "shape": "centerRect",
+  "title": "Prostokąt od środka — środek i narożnik",
+  "svg": null,
+  "group": "rect",
+  "variant": true
+ },
+ {
+  "shape": "rect3",
+  "title": "Prostokąt 3-punktowy — podstawa i wysokość",
+  "svg": null,
+  "group": "rect",
+  "variant": true
+ },
+ {
+  "shape": "circle",
+  "title": "Okrąg — wybierz wariant strzałką",
+  "svg": "<svg viewBox=\"0 0 32 32\"><circle cx=\"16\" cy=\"16\" r=\"11\"></circle><circle cx=\"16\" cy=\"16\" r=\"1.5\"></circle></svg>",
+  "group": "circle",
+  "variant": false
+ },
+ {
+  "shape": "circle",
+  "title": "Okrąg od środka i promienia",
+  "svg": null,
+  "group": "circle",
+  "variant": true
+ },
+ {
+  "shape": "circleTangent2",
+  "title": "Okrąg styczny do dwóch prostych — kliknij dwie linie, następnie wskaż wielkość okręgu",
+  "svg": null,
+  "group": "circle",
+  "variant": true
+ },
+ {
+  "shape": "circle2",
+  "title": "Okrąg przez dwa końce średnicy",
+  "svg": null,
+  "group": "circle",
+  "variant": true
+ },
+ {
+  "shape": "circle3",
+  "title": "Okrąg przez trzy punkty",
+  "svg": null,
+  "group": "circle",
+  "variant": true
+ },
+ {
+  "shape": "text",
+  "title": "Tekst — wpisz treść w panelu i kliknij miejsce na szkicu",
+  "svg": "<svg viewBox=\"0 0 32 32\"><path d=\"M6 7H26M16 7V26M11.5 26H20.5\"></path></svg>",
+  "group": null,
+  "variant": false
+ },
+ {
+  "shape": "ellipse",
+  "title": "Elipsa",
+  "svg": "<svg viewBox=\"0 0 32 32\"><path d=\"M3 16a13 8 0 1 0 26 0a13 8 0 1 0 -26 0M16 4V28M2 16H30\"></path></svg>",
+  "group": null,
+  "variant": false
+ },
+ {
+  "shape": "slot",
+  "title": "Fasolka / szczelina",
+  "svg": "<svg viewBox=\"0 0 32 32\"><path d=\"M10 7H22A9 9 0 0 1 22 25H10A9 9 0 0 1 10 7Z\"></path></svg>",
+  "group": null,
+  "variant": false
+ },
+ {
+  "shape": "polygon",
+  "title": "Wielokąt (5 boków)",
+  "svg": "<svg viewBox=\"0 0 32 32\"><path d=\"M16 3L27 9V22L16 29L5 22V9Z\"></path></svg>",
+  "group": null,
+  "variant": false
+ },
+ {
+  "shape": "arc",
+  "title": "Łuk 3-punktowy",
+  "svg": "<svg viewBox=\"0 0 32 32\"><path d=\"M5 24Q16 0 27 24M5 24h1M27 24h1\"></path></svg>",
+  "group": null,
+  "variant": false
+ },
+ {
+  "shape": "point",
+  "title": "Punkt",
+  "svg": "<svg viewBox=\"0 0 32 32\"><path d=\"M16 4V28M4 16H28M13 13h6v6h-6z\"></path></svg>",
+  "group": null,
+  "variant": false
+ },
+ {
+  "shape": "construction",
+  "title": "Linia konstrukcyjna",
+  "svg": "<svg viewBox=\"0 0 32 32\"><path d=\"M4 26L28 5\"></path></svg>",
+  "group": null,
+  "variant": false
+ },
+ {
+  "shape": "measure",
+  "title": "Wymiar szkicu — wybierz geometrię, a następnie położenie wymiaru",
+  "svg": "<svg viewBox=\"0 0 32 32\"><path d=\"M4 8V25M28 8V25M6 17H26M6 17l5-4M6 17l5 4M26 17l-5-4M26 17l-5 4\"></path></svg>",
+  "group": null,
+  "variant": false
+ },
+ {
+  "shape": "trim",
+  "title": "Nożyczki — usuń fragment pomiędzy punktami przecięcia",
+  "svg": "<svg viewBox=\"0 0 32 32\"><circle cx=\"8\" cy=\"24\" r=\"4\"></circle><circle cx=\"23\" cy=\"24\" r=\"4\"></circle><path d=\"M11 21L27 5M20 21L5 5M14 18l5-5\"></path></svg>",
+  "group": null,
+  "variant": false
+ }
+]

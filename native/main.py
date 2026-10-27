@@ -12,6 +12,7 @@ def main():
     parser.add_argument('--self-test',action='store_true')
     parser.add_argument('--report')
     parser.add_argument('--demo',action='store_true')
+    parser.add_argument('--classic',action='store_true',help='stare okno z panelem bocznym')
     args=parser.parse_args()
     # Application caches must be writable in a portable install as well.
     cache=Path(os.environ.get('LOCALAPPDATA') or os.environ.get('XDG_CACHE_HOME') or Path.home()/'.cache')/'RCCAD'
@@ -39,8 +40,12 @@ def main():
         except OSError:pass
         QMessageBox.critical(None,'RCCAD — błąd',f'Wystąpił błąd: {value}\n\nDotychczasowy zapis projektu nie został nadpisany.\nSzczegóły: {cache / "error.log"}')
     sys.excepthook=exception_hook
-    from rccad.window import MainWindow
-    window=MainWindow()
+    if args.classic:
+        from rccad.window import MainWindow
+        window=MainWindow()
+    else:
+        from rccad.studio import StudioWindow
+        window=StudioWindow()
     if args.demo:
         from rccad import kernel as k
         from rccad.document import Body

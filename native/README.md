@@ -97,3 +97,9 @@ Rysowanie szkiców bezpośrednio myszą nie jest jeszcze dostępne.
 - Krawędzie przy zaokrągleniu i fazowaniu: klik = jedna krawędź (podświetlana pod kursorem), **Shift + klik** = cały łańcuch
   styczny, Ctrl + klik (lub „Wybieraj wiele") dodaje do zaznaczenia.
 - Widok: lewy przycisk obraca, prawy przycisk lub Shift + przeciąganie przesuwa, rolka zbliża.
+
+## Interfejs 0.4 „Studio” (domyślny)
+Okno odtwarza wersję HTML: pływające przyciski (Plik, Szkic, Wyciągnij, Boolean, Edytuj bryłę, Lustro), pasek kształtów szkicu z wariantami,
+wybór płaszczyzny, szkicowanie klik–klik z podglądem i wymiarem przy kursorze, wyciąganie kliknięciem w profil z podglądem na żywo,
+Boolean przez klikanie brył (baza + narzędzia), zaokrąglenia/fazy przez klikanie krawędzi, lustro, kostka widoków, cofnij/ponów, tryby myszy.
+Stare okno z panelem bocznym: `RCCAD Desktop.exe --classic`.

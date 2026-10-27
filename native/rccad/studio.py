@@ -1,0 +1,1027 @@
+"""Okno "Studio": układ, grafika i sposób modelowania/szkicowania odtworzone z wersji HTML (natywnie, bez przeglądarki)."""
+from __future__ import annotations
+from pathlib import Path
+from PySide6.QtCore import QEvent, QObject, QRunnable, QSize, Qt, QThreadPool, QTimer, Signal
+from PySide6.QtGui import QCursor, QKeySequence, QShortcut
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFrame, QHBoxLayout,
+                               QLabel, QMainWindow, QMenu, QMessageBox, QPushButton, QToolButton, QVBoxLayout, QWidget)
+from . import kernel
+from . import shell_ui as ui
+from .document import Body, Document
+from .viewport import CadView
+
+NEED = {'rect': 2, 'centerRect': 2, 'circle': 2, 'circle2': 2, 'circle3': 3, 'ellipse': 2, 'slot': 3, 'polygon': 2}
+HINTS = {
+    'rect': ['Kliknij pierwszy narożnik prostokąta.', 'Kliknij przeciwległy narożnik.'],
+    'centerRect': ['Kliknij środek prostokąta.', 'Kliknij narożnik.'],
+    'circle': ['Kliknij środek okręgu.', 'Kliknij punkt na okręgu (promień).'],
+    'circle2': ['Kliknij pierwszy koniec średnicy.', 'Kliknij drugi koniec średnicy.'],
+    'circle3': ['Kliknij pierwszy punkt okręgu.', 'Kliknij drugi punkt.', 'Kliknij trzeci punkt.'],
+    'ellipse': ['Kliknij środek elipsy.', 'Kliknij narożnik opisanego prostokąta.'],
+    'slot': ['Kliknij środek pierwszego końca.', 'Kliknij środek drugiego końca.', 'Kliknij punkt określający szerokość.'],
+    'polygon': ['Kliknij środek wielokąta.', 'Kliknij wierzchołek.'],
+}
+LATER = {'line', 'arc', 'text', 'point', 'construction', 'measure', 'trim', 'rect3', 'circleTangent2'}
+TINT_BASE = (.30, .55, .95, 1)
+TINT_TOOL = (.95, .55, .20, 1)
+
+
+class _Signals(QObject):
+    done = Signal(object)
+    failed = Signal(str)
+
+
+class _Work(QRunnable):
+    def __init__(self, function):
+        super().__init__()
+        self.function = function
+        self.signals = _Signals()
+
+    def run(self):
+        try:
+            self.signals.done.emit(self.function())
+        except Exception as exc:
+            self.signals.failed.emit(str(exc) if isinstance(exc, kernel.CadError) else f'Operacja nie powiodła się: {exc}')
+
+
+def _row(label, widget):
+    box = QWidget()
+    layout = QVBoxLayout(box)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(3)
+    layout.addWidget(QLabel(label))
+    layout.addWidget(widget)
+    return box
+
+
+def _spin(value, low=-1e6, high=1e6, suffix=' mm', decimals=3):
+    box = QDoubleSpinBox()
+    box.setRange(low, high)
+    box.setDecimals(decimals)
+    box.setValue(value)
+    if suffix:
+        box.setSuffix(suffix)
+    return box
+
+
+class StudioWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.document = Document()
+        self.pool = QThreadPool.globalInstance()
+        self.busy = False
+        self.selected: list[str] = []
+        self.edges: dict[str, set] = {}
+        self.mode = None            # None | plane | sketch | extrude | bool | mod | mirror
+        self.tool = 'rect'
+        self.sides = 5
+        self.points: list[tuple[float, float]] = []
+        self.sketch_plane = None
+        self.extrude_body_id = None
+        self.bool_ids: list[str] = []
+        self.mirror_id = None
+        self.mirror_face = None
+        self._work = None
+        self.resize(1400, 850)
+        self.setStyleSheet(ui.STYLE)
+        self.view = CadView(self)
+        self.view.click_mode = True
+        self.setCentralWidget(self.view)
+        self.view.setStyleSheet('')
+        self.view.planeClicked.connect(self.plane_picked)
+        self.view.sketchMoved.connect(self.sketch_moved)
+        self.view.sketchClicked.connect(self.sketch_clicked)
+        self.view.viewClicked.connect(self.view_clicked)
+        self.view.viewHover.connect(self.view_hover)
+        self._build_overlays()
+        self.view.installEventFilter(self)
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.setInterval(120)
+        self._preview_timer.timeout.connect(self.update_extrude_preview)
+        for seq, fn in (('Ctrl+Z', self.undo), ('Ctrl+Y', self.redo), ('Ctrl+Shift+Z', self.redo), ('Ctrl+S', self.save_project),
+                        ('Ctrl+O', self.open_project), ('Ctrl+N', self.new_project), ('Delete', self.delete_selected)):
+            QShortcut(QKeySequence(seq), self, activated=fn)
+        self.refresh(True)
+        self._layout_overlays()
+        self.hint('Wybierz narzędzie z paska u góry. „Szkic” zaczyna rysowanie na płaszczyźnie.')
+
+    # ---------- budowa interfejsu ----------
+    def _build_overlays(self):
+        v = self.view
+        icons = [('file', ui.svg_icon(ui.file_svg('fileTool.svg'), size=34), 'Plik'),
+                 ('sketch', ui.png_icon('newSketch.png'), 'Nowy szkic'),
+                 ('extrude', ui.png_icon('extrudeTool.png'), 'Wyciągnij'),
+                 ('bool', ui.png_icon('boolTool.png'), 'Boolean — suma, różnica, część wspólna'),
+                 ('mod', ui.png_icon('modTool.png'), 'Edytuj bryłę — zaokrąglenie i fazowanie'),
+                 ('mirror', ui.png_icon('mirrorTool.png'), 'Lustro')]
+        self.tools = {}
+        for key, icon, tip in icons:
+            button = ui.big_tool(icon, tip, checkable=key != 'file')
+            button.setParent(v)
+            self.tools[key] = button
+        self.tools['file'].clicked.connect(self.file_menu)
+        self.tools['sketch'].clicked.connect(lambda: self.set_mode('plane') if self.mode not in ('plane', 'sketch') else self.set_mode(None))
+        self.tools['extrude'].clicked.connect(lambda: self.set_mode('extrude') if self.mode != 'extrude' else self.set_mode(None))
+        self.tools['bool'].clicked.connect(lambda: self.set_mode('bool') if self.mode != 'bool' else self.set_mode(None))
+        self.tools['mod'].clicked.connect(lambda: self.set_mode('mod') if self.mode != 'mod' else self.set_mode(None))
+        self.tools['mirror'].clicked.connect(lambda: self.set_mode('mirror') if self.mode != 'mirror' else self.set_mode(None))
+
+        # pasek kształtów szkicu (18,80)
+        self.shape_bar = QFrame(v)
+        self.shape_bar.setObjectName('toolbar')
+        layout = QHBoxLayout(self.shape_bar)
+        layout.setContentsMargins(7, 7, 7, 7)
+        layout.setSpacing(5)
+        self.shape_buttons = {}
+        shapes = ui.load_shapes()
+        groups: dict[str, list[dict]] = {}
+        for item in shapes:
+            if item['variant']:
+                groups.setdefault(item['group'], []).append(item)
+        for item in shapes:
+            if item['variant']:
+                continue
+            button = QToolButton()
+            button.setObjectName('shape')
+            button.setCheckable(True)
+            button.setFixedSize(40, 40)
+            button.setIcon(ui.svg_icon(ui.stroked_shape_svg(item['svg']), size=26))
+            button.setIconSize(QSize(26, 26))
+            button.setToolTip(item['title'])
+            button.clicked.connect(lambda _=False, name=item['shape']: self.choose_tool(name))
+            layout.addWidget(button)
+            self.shape_buttons[item['shape']] = button
+            if item['group'] and groups.get(item['group']):
+                more = QToolButton()
+                more.setObjectName('expand')
+                more.setText('▾')
+                more.setFixedSize(16, 40)
+                menu = QMenu(more)
+                for variant in groups[item['group']]:
+                    menu.addAction(variant['title'], lambda name=variant['shape'], b=button: self.choose_tool(name, b))
+                more.setMenu(menu)
+                more.setPopupMode(QToolButton.InstantPopup)
+                layout.addWidget(more)
+        done = QPushButton('Zakończ szkic')
+        done.setObjectName('endsketch')
+        done.setStyleSheet('QPushButton#endsketch{background:#f3f7fb;border:1px solid #9db8cf;border-radius:8px;padding:9px 14px;color:#254c71;font:13px "Segoe UI";}'
+                           'QPushButton#endsketch:hover{background:#dcecff;}')
+        done.clicked.connect(lambda: self.set_mode(None))
+        layout.addWidget(done)
+        self.shape_bar.adjustSize()
+        self.shape_bar.hide()
+
+        # historia, warstwy płaszczyzn, widok domowy (prawy górny róg)
+        self.undo_button = self._round('↶', 'Cofnij (Ctrl+Z)', self.undo)
+        self.redo_button = self._round('↷', 'Ponów (Ctrl+Y)', self.redo)
+        self.layers = QToolButton(v)
+        self.layers.setObjectName('layers')
+        self.layers.setCheckable(True)
+        self.layers.setFixedSize(40, 40)
+        self.layers.setIcon(ui.svg_icon('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round">'
+                                        '<path d="M16 5l11 6-11 6-11-6z"/><path d="M5 16l11 6 11-6"/><path d="M5 21l11 6 11-6"/></svg>', normal='#ffffff', active='#344e69', size=26))
+        self.layers.setToolTip('Pokaż / ukryj płaszczyzny XY, XZ, YZ')
+        self.layers.toggled.connect(lambda on: self.view.show_planes(on or self.mode in ('plane', 'sketch'), only=self.sketch_plane if self.mode == 'sketch' else None))
+        self.home = QToolButton(v)
+        self.home.setObjectName('home')
+        self.home.setText('⌂')
+        self.home.setFixedSize(36, 36)
+        self.home.setToolTip('Widok domowy — dopasuj do modelu')
+        self.home.clicked.connect(lambda: (self.view.set_view('iso'), self.view.fit_all()))
+
+        # kostka widoku (138×138)
+        self.cube = QFrame(v)
+        self.cube.setObjectName('floating')
+        self.cube.setFixedSize(138, 138)
+        grid = [('Góra', 'Z', 0, 1), ('Dół', '-Z', 2, 1), ('Lewo', '-X', 1, 0), ('Przód', '-Y', 1, 1), ('Prawo', 'X', 1, 2),
+                ('Tył', 'Y', 2, 2), ('Iso', 'iso', 0, 2), ('XY', 'XY', 2, 0), ('XZ', 'XZ', 0, 0)]
+        shades = {'Z': '#8fb2d6', '-Z': '#5f7f9f', '-X': '#7897b6', '-Y': '#a3c1de', 'X': '#6d8cab', 'Y': '#6280a0', 'iso': '#3b6ea5', 'XY': '#3b82f6', 'XZ': '#22a06b'}
+        for text, name, row, col in grid:
+            button = QToolButton(self.cube)
+            button.setObjectName('cube')
+            button.setText(text)
+            button.setFixedSize(38, 38)
+            button.move(9 + col * 40, 9 + row * 40)
+            button.setStyleSheet(f'QToolButton#cube{{background:{shades[name]};}}')
+            button.clicked.connect(lambda _=False, n=name: self.view.set_view(n))
+        self.cube.setToolTip('Widoki standardowe')
+
+        # tryb myszy (dół, środek)
+        self.pad = QFrame(v)
+        self.pad.setObjectName('floating')
+        pad_layout = QHBoxLayout(self.pad)
+        pad_layout.setContentsMargins(8, 8, 8, 8)
+        pad_layout.setSpacing(6)
+        self.pad_buttons = {}
+        for name, text, tip in (('select', '↖', 'Zaznaczanie'), ('orbit', '⟳', 'Obrót widoku'), ('pan', '✥', 'Przesuwanie widoku')):
+            button = QToolButton()
+            button.setObjectName('pad')
+            button.setText(text)
+            button.setCheckable(True)
+            button.setFixedSize(40, 40)
+            button.setToolTip(tip)
+            button.clicked.connect(lambda _=False, n=name: self.set_mouse(n))
+            pad_layout.addWidget(button)
+            self.pad_buttons[name] = button
+        self.pad.adjustSize()
+        self.pad_buttons['select'].setChecked(True)
+
+        self.hint_label = QLabel(v)
+        self.hint_label.setObjectName('hint')
+        self.notice = QLabel(v)
+        self.notice.setObjectName('notice')
+        self.notice.hide()
+        self.notice_timer = QTimer(self)
+        self.notice_timer.setSingleShot(True)
+        self.notice_timer.timeout.connect(self.notice.hide)
+        self.dim = QLabel(v)
+        self.dim.setObjectName('dim')
+        self.dim.hide()
+        self.dim.setAttribute(Qt.WA_TransparentForMouseEvents)
+
+        self._build_panels()
+
+    def _round(self, text, tip, callback):
+        button = QToolButton(self.view)
+        button.setObjectName('round')
+        button.setText(text)
+        button.setFixedSize(40, 40)
+        button.setToolTip(tip)
+        button.setStyleSheet('QToolButton#round{font-size:20px;}')
+        button.clicked.connect(callback)
+        return button
+
+    def _build_panels(self):
+        v = self.view
+        # --- Wyciągnięcie ---
+        self.ex_panel = ui.panel(195)
+        self.ex_panel.setParent(v)
+        lay = QVBoxLayout(self.ex_panel)
+        lay.setContentsMargins(13, 13, 13, 13)
+        lay.setSpacing(9)
+        title = QLabel('Wyciągnięcie')
+        title.setObjectName('title')
+        lay.addWidget(title)
+        self.ex_op = QComboBox()
+        self.ex_op.addItem('Nowa bryła', 'new')
+        self.ex_op.addItem('Połącz z bryłą', 'union')
+        self.ex_op.addItem('Wytnij z bryły', 'subtract')
+        lay.addWidget(_row('Operacja', self.ex_op))
+        self.ex_target = QComboBox()
+        self.ex_target_row = _row('Bryła docelowa', self.ex_target)
+        lay.addWidget(self.ex_target_row)
+        self.ex_sym = QCheckBox('Symetrycznie w obie strony')
+        lay.addWidget(self.ex_sym)
+        self.ex_status = QLabel('Kliknij zamknięty profil szkicu.')
+        self.ex_status.setObjectName('status')
+        self.ex_status.setWordWrap(True)
+        lay.addWidget(self.ex_status)
+        self.ex_panel.hide()
+        # górny pasek wyciągnięcia
+        self.ex_bar = QFrame(v)
+        self.ex_bar.setObjectName('panel')
+        bar = QHBoxLayout(self.ex_bar)
+        bar.setContentsMargins(13, 9, 13, 9)
+        bar.setSpacing(9)
+        bar.addWidget(QLabel('Odległość'))
+        self.ex_distance = _spin(20, -1e5, 1e5)
+        self.ex_distance.setFixedWidth(130)
+        bar.addWidget(self.ex_distance)
+        self.ex_apply = QPushButton('✓ Zastosuj')
+        self.ex_apply.clicked.connect(self.apply_extrude)
+        bar.addWidget(self.ex_apply)
+        cancel = QPushButton('✕')
+        cancel.clicked.connect(lambda: self.set_mode(None))
+        bar.addWidget(cancel)
+        self.ex_bar.adjustSize()
+        self.ex_bar.hide()
+        self.ex_distance.valueChanged.connect(lambda *_: self._preview_timer.start())
+        self.ex_sym.toggled.connect(lambda *_: self._preview_timer.start())
+        self.ex_op.currentIndexChanged.connect(self._extrude_options_changed)
+        self.ex_target.currentIndexChanged.connect(lambda *_: self._preview_timer.start())
+
+        # --- Boolean ---
+        self.bool_panel = ui.panel(262)
+        self.bool_panel.setParent(v)
+        lay = QVBoxLayout(self.bool_panel)
+        lay.setContentsMargins(13, 13, 13, 13)
+        lay.setSpacing(9)
+        title = QLabel('Boolean')
+        title.setObjectName('title')
+        lay.addWidget(title)
+        self.bool_op = QComboBox()
+        self.bool_op.addItem('Suma (połącz)', 'union')
+        self.bool_op.addItem('Różnica (wytnij narzędziami)', 'subtract')
+        self.bool_op.addItem('Część wspólna', 'intersect')
+        lay.addWidget(_row('Operacja', self.bool_op))
+        self.bool_status = QLabel('')
+        self.bool_status.setObjectName('status')
+        self.bool_status.setWordWrap(True)
+        lay.addWidget(self.bool_status)
+        row = QHBoxLayout()
+        apply_ = QPushButton('Zastosuj')
+        apply_.clicked.connect(self.apply_bool)
+        reset = QPushButton('Wyczyść wybór')
+        reset.clicked.connect(self.reset_bool)
+        row.addWidget(apply_)
+        row.addWidget(reset)
+        lay.addLayout(row)
+        self.bool_panel.hide()
+
+        # --- Edytuj bryłę (zaokrąglenie / fazowanie) ---
+        self.mod_panel = ui.panel(262)
+        self.mod_panel.setParent(v)
+        lay = QVBoxLayout(self.mod_panel)
+        lay.setContentsMargins(13, 13, 13, 13)
+        lay.setSpacing(9)
+        title = QLabel('Edytuj bryłę')
+        title.setObjectName('title')
+        lay.addWidget(title)
+        self.mod_kind = QComboBox()
+        self.mod_kind.addItem('Zaokrąglenie krawędzi', 'fillet')
+        self.mod_kind.addItem('Fazowanie krawędzi', 'chamfer')
+        lay.addWidget(_row('Operacja', self.mod_kind))
+        self.mod_size = _spin(2, .001, 1e5)
+        lay.addWidget(_row('Promień / odległość', self.mod_size))
+        self.mod_status = QLabel('')
+        self.mod_status.setObjectName('status')
+        self.mod_status.setWordWrap(True)
+        lay.addWidget(self.mod_status)
+        row = QHBoxLayout()
+        apply_ = QPushButton('Zastosuj')
+        apply_.clicked.connect(self.apply_mod)
+        clear = QPushButton('Wyczyść')
+        clear.clicked.connect(self.clear_edges)
+        row.addWidget(apply_)
+        row.addWidget(clear)
+        lay.addLayout(row)
+        self.mod_panel.hide()
+
+        # --- Lustro ---
+        self.mir_panel = ui.panel(262)
+        self.mir_panel.setParent(v)
+        lay = QVBoxLayout(self.mir_panel)
+        lay.setContentsMargins(13, 13, 13, 13)
+        lay.setSpacing(9)
+        title = QLabel('Lustro')
+        title.setObjectName('title')
+        lay.addWidget(title)
+        self.mir_plane = QComboBox()
+        for name in ('XY', 'XZ', 'YZ'):
+            self.mir_plane.addItem(f'Płaszczyzna {name}', name)
+        self.mir_plane.addItem('Wskazana ściana (kliknij w widoku)', 'face')
+        lay.addWidget(_row('Płaszczyzna odbicia', self.mir_plane))
+        self.mir_keep = QCheckBox('Zachowaj oryginał')
+        self.mir_keep.setChecked(True)
+        lay.addWidget(self.mir_keep)
+        self.mir_status = QLabel('')
+        self.mir_status.setObjectName('status')
+        self.mir_status.setWordWrap(True)
+        lay.addWidget(self.mir_status)
+        apply_ = QPushButton('Zastosuj')
+        apply_.clicked.connect(self.apply_mirror)
+        lay.addWidget(apply_)
+        self.mir_panel.hide()
+        self.panels = (self.ex_panel, self.ex_bar, self.bool_panel, self.mod_panel, self.mir_panel)
+        for p in self.panels:
+            p.adjustSize()
+
+    def _layout_overlays(self):
+        W, H = self.view.width(), self.view.height()
+        for i, key in enumerate(('file', 'sketch', 'extrude', 'bool', 'mod', 'mirror')):
+            self.tools[key].move(18 + 60 * i, 18)
+        self.shape_bar.move(18, 80)
+        self.undo_button.move(W - 350, 20)
+        self.redo_button.move(W - 302, 20)
+        self.layers.move(W - 254, 20)
+        self.home.move(W - 205, 22)
+        self.cube.move(W - 160, 20)
+        self.pad.move(max(18, W // 2 - self.pad.width() // 2), H - 170)
+        top = 150 if self.shape_bar.isVisible() else 88
+        self.ex_panel.move(18, 170)
+        self.ex_bar.move(230, 170)
+        for p in (self.bool_panel, self.mod_panel, self.mir_panel):
+            p.move(18, top)
+        self.hint_label.adjustSize()
+        self.hint_label.move(18, H - 36)
+        self.notice.adjustSize()
+        self.notice.move(max(18, (W - self.notice.width()) // 2), 20 if W > 900 else 88)
+        for w in (*self.tools.values(), self.shape_bar, self.undo_button, self.redo_button, self.layers, self.home,
+                  self.cube, self.pad, self.hint_label, *self.panels):
+            w.raise_()
+        self.notice.raise_()
+        self.dim.raise_()
+
+    def eventFilter(self, obj, event):
+        if obj is self.view and event.type() == QEvent.Resize:
+            self._layout_overlays()
+        return super().eventFilter(obj, event)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._layout_overlays()
+
+    # ---------- komunikaty ----------
+    def hint(self, text):
+        self.hint_label.setText(text)
+        self.hint_label.adjustSize()
+        self._layout_overlays()
+
+    def toast(self, text, ms=4500):
+        self.notice.setText(text)
+        self.notice.adjustSize()
+        self.notice.show()
+        self._layout_overlays()
+        self.notice_timer.start(ms)
+
+    # ---------- tryby ----------
+    def set_mouse(self, name):
+        self.view.mouse_mode = name
+        for key, button in self.pad_buttons.items():
+            button.setChecked(key == name)
+        self.view.setCursor(Qt.OpenHandCursor if name != 'select' else Qt.ArrowCursor)
+
+    def set_mode(self, mode):
+        """Przełącza tryb narzędzia; None = zwykłe zaznaczanie."""
+        if self.busy:
+            return
+        self.mode = mode
+        self.points = []
+        self.dim.hide()
+        self.view.set_preview_mesh(None)
+        self.view.sketch_plane = None
+        self.view.sketch_tool = None
+        self.view.plane_pick = False
+        self.view.edge_mode = False
+        self.view.tints = {}
+        self.sketch_plane = None
+        self.extrude_body_id = None
+        self.bool_ids = []
+        self.mirror_id = None
+        self.mirror_face = None
+        self.edges = {}
+        for key, button in self.tools.items():
+            if key != 'file':
+                button.setChecked(key == ('sketch' if mode in ('plane', 'sketch') else mode))
+        for p in (self.shape_bar, *self.panels):
+            p.hide()
+        self.view.show_planes(self.layers.isChecked())
+        self.view.setCursor(Qt.ArrowCursor)
+        if mode == 'plane':
+            self.view.plane_pick = True
+            self.view.show_planes(True)
+            self.hint('Szkic: kliknij płaszczyznę XY, XZ lub YZ, na której chcesz rysować.')
+        elif mode == 'extrude':
+            self.fill_targets()
+            self.ex_panel.show()
+            self.ex_status.setText('Kliknij zamknięty profil szkicu, aby go wyciągnąć.')
+            self.hint('Wyciągnięcie: kliknij profil szkicu. Odległość wpisz u góry; ujemna — w drugą stronę.')
+            self.view.setCursor(Qt.PointingHandCursor)
+        elif mode == 'bool':
+            self.bool_panel.show()
+            self.update_bool_status()
+            self.hint('Boolean: kliknij bryłę bazową, potem kolejne bryły-narzędzia, i wybierz operację.')
+        elif mode == 'mod':
+            self.mod_panel.show()
+            self.update_mod_status()
+            self.hint('Edytuj bryłę: kliknij krawędź (Shift — cały łańcuch styczny, Ctrl — dodaj do wyboru).')
+        elif mode == 'mirror':
+            self.mir_panel.show()
+            self.update_mirror_status()
+            self.hint('Lustro: kliknij bryłę, wybierz płaszczyznę odbicia i zastosuj.')
+        else:
+            self.hint('Wybierz narzędzie z paska u góry. „Szkic” zaczyna rysowanie na płaszczyźnie.')
+        self.refresh()
+        self._layout_overlays()
+
+    def choose_tool(self, name, button=None):
+        if name in LATER:
+            self.toast('To narzędzie szkicu dołączę w następnym etapie — na razie działają prostokąty, okręgi, elipsa, fasolka i wielokąt.')
+            return
+        self.tool = name
+        self.points = []
+        self.dim.hide()
+        self.view.set_preview_mesh(None)
+        self.view.sketch_tool = name
+        for key, b in self.shape_buttons.items():
+            b.setChecked(b is (button or self.shape_buttons.get(self._group_button(name))))
+        self.show_sketch_hint()
+
+    @staticmethod
+    def _group_button(name):
+        return {'centerRect': 'rect', 'rect3': 'rect', 'circle2': 'circle', 'circle3': 'circle', 'circleTangent2': 'circle'}.get(name, name)
+
+    def show_sketch_hint(self):
+        texts = HINTS.get(self.tool, [''])
+        self.hint(f'Płaszczyzna {self.sketch_plane}. ' + texts[min(len(self.points), len(texts) - 1)] + '  (Esc — przerwij, Alt — bez przyciągania)')
+
+    # ---------- szkic ----------
+    def plane_picked(self, name):
+        if self.mode != 'plane':
+            return
+        self.mode = 'sketch'
+        self.sketch_plane = name
+        self.view.plane_pick = False
+        self.view.sketch_plane = name
+        self.view.show_planes(True, only=name)
+        self.view.set_view(name)
+        self.view.setCursor(Qt.CrossCursor)
+        self.shape_bar.show()
+        self.points = []
+        self.choose_tool(self.tool if self.tool not in LATER else 'rect')
+        self.shape_buttons.get(self._group_button(self.tool), self.shape_buttons['rect']).setChecked(True)
+        self._layout_overlays()
+
+    def _shape(self, points):
+        return kernel.sketch_shape(self.tool, self.sketch_plane, points, self.sides)
+
+    def sketch_moved(self, plane, u, v):
+        if self.mode != 'sketch' or not self.points or self.busy:
+            return
+        pts = [*self.points, (u, v)]
+        need = NEED.get(self.tool, 2)
+        try:
+            if len(pts) == need:
+                shape = self._shape(pts)
+            elif self.tool == 'circle3' and len(pts) == 2:
+                shape = kernel.sketch_shape('circle2', self.sketch_plane, pts)
+            else:
+                shape = None
+            self.view.set_preview_mesh(kernel.display_mesh(shape) if shape is not None else None, line_color=(1, .48, .05, 1), width=2.5)
+        except kernel.CadError:
+            self.view.set_preview_mesh(None)
+        self.show_dimension(pts)
+
+    def show_dimension(self, pts):
+        import math
+        a = self.points[0]
+        b = pts[-1]
+        du, dv = abs(b[0] - a[0]), abs(b[1] - a[1])
+        if self.tool in ('rect', 'ellipse'):
+            text = f'{du:.2f} × {dv:.2f} mm'
+        elif self.tool == 'centerRect':
+            text = f'{2 * du:.2f} × {2 * dv:.2f} mm'
+        elif self.tool in ('circle', 'polygon'):
+            text = f'R {math.hypot(du, dv):.2f} mm'
+        elif self.tool == 'circle2':
+            text = f'Ø {math.hypot(b[0] - a[0], b[1] - a[1]):.2f} mm'
+        else:
+            text = f'{math.hypot(b[0] - a[0], b[1] - a[1]):.2f} mm'
+        self.dim.setText(text)
+        self.dim.adjustSize()
+        pos = self.view.mapFromGlobal(QCursor.pos())
+        self.dim.move(pos.x() + 16, pos.y() + 14)
+        self.dim.show()
+        self.dim.raise_()
+
+    def sketch_clicked(self, plane, u, v):
+        if self.mode != 'sketch' or self.busy or self.tool in LATER:
+            return
+        self.points.append((u, v))
+        if len(self.points) < NEED[self.tool]:
+            self.show_sketch_hint()
+            return
+        points, self.points = list(self.points), []
+        self.dim.hide()
+        self.view.set_preview_mesh(None)
+        try:
+            shape = self._shape(points)
+        except kernel.CadError as exc:
+            self.toast(str(exc))
+            self.show_sketch_hint()
+            return
+        name = f'Szkic {plane}'
+        self.run_operation('Tworzenie szkicu', lambda: Body(name, shape, 'sketch', plane).prepared(), self.add_prepared)
+        self.show_sketch_hint()
+
+    # ---------- klikanie w widoku ----------
+    def view_hover(self, x, y):
+        if self.mode == 'mod':
+            self.view._set_hover_edge(self.view.nearest_edge(x, y))
+
+    def view_clicked(self, x, y, shift, ctrl):
+        if self.busy:
+            return
+        if self.mode == 'extrude':
+            self.pick_profile(x, y)
+        elif self.mode == 'bool':
+            self.pick_bool(x, y)
+        elif self.mode == 'mod':
+            self.pick_edge(x, y, shift, ctrl)
+        elif self.mode == 'mirror':
+            self.pick_mirror(x, y)
+        elif self.mode is None:
+            bid = self.view.pick_body(x, y)
+            if bid is None:
+                if not (shift or ctrl):
+                    self.selected = []
+            elif shift or ctrl:
+                self.selected = [i for i in self.selected if i != bid] if bid in self.selected else [*self.selected, bid]
+            else:
+                self.selected = [bid]
+            self.refresh()
+
+    # ---------- wyciąganie ----------
+    def fill_targets(self):
+        self.ex_target.blockSignals(True)
+        self.ex_target.clear()
+        for body in self.document.bodies:
+            if body.kind == 'solid':
+                self.ex_target.addItem(body.name, body.id)
+        self.ex_target.blockSignals(False)
+        has = self.ex_target.count() > 0
+        for index in (1, 2):
+            item = self.ex_op.model().item(index)
+            item.setEnabled(has)
+        if not has:
+            self.ex_op.setCurrentIndex(0)
+        self._extrude_options_changed()
+
+    def _extrude_options_changed(self, *_):
+        self.ex_target_row.setVisible(self.ex_op.currentData() != 'new')
+        self.ex_panel.adjustSize()
+        self._preview_timer.start()
+
+    def pick_profile(self, x, y):
+        bid = self.view.pick_profile(x, y)
+        if bid is None:
+            self.toast('Tu nie ma zamkniętego profilu szkicu. Kliknij wewnątrz narysowanej figury.')
+            return
+        self.extrude_body_id = bid
+        self.ex_bar.show()
+        self.ex_status.setText('Profil wybrany. Ustaw odległość u góry i zatwierdź ✓.')
+        self.hint('Wyciągnięcie: ustaw odległość i naciśnij ✓ Zastosuj.')
+        self.ex_distance.setFocus()
+        self.update_extrude_preview()
+        self._layout_overlays()
+
+    def _extrude_tool(self):
+        body = self.document.get(self.extrude_body_id)
+        if body is None:
+            raise kernel.CadError('Wybierz profil szkicu.')
+        return kernel.extrude(body.shape, body.plane, self.ex_distance.value(), self.ex_sym.isChecked())
+
+    def update_extrude_preview(self):
+        if self.mode != 'extrude' or self.extrude_body_id is None:
+            return
+        try:
+            mesh = kernel.display_mesh(self._extrude_tool())
+        except Exception as exc:
+            self.view.set_preview_mesh(None)
+            self.ex_status.setText(str(exc))
+            return
+        color = (.95, .30, .25, .55) if self.ex_op.currentData() == 'subtract' else (.25, .55, .95, .55)
+        self.view.set_preview_mesh(mesh, color=color)
+
+    def apply_extrude(self):
+        if self.busy or self.extrude_body_id is None:
+            return
+        body = self.document.get(self.extrude_body_id)
+        op = self.ex_op.currentData()
+        base = self.document.get(self.ex_target.currentData()) if op != 'new' else None
+        if op != 'new' and base is None:
+            self.toast('Wybierz bryłę docelową.')
+            return
+        distance, symmetric = self.ex_distance.value(), self.ex_sym.isChecked()
+
+        def build():
+            tool = kernel.extrude(body.shape, body.plane, distance, symmetric)
+            if base is None:
+                return [*self.document.bodies, Body('Wyciągnięcie', tool).prepared()]
+            result = base.changed(kernel.boolean(op, base.shape, [tool]))
+            return [result if b.id == base.id else b for b in self.document.bodies]
+
+        def apply(bodies):
+            self.document.commit(bodies)
+            self.selected = [bodies[-1].id] if base is None else [base.id]
+
+        self.view.set_preview_mesh(None)
+        self.run_operation('Wyciąganie', build, apply, after=lambda: self.set_mode(None))
+
+    # ---------- boolean ----------
+    def pick_bool(self, x, y):
+        bid = self.view.pick_body(x, y)
+        body = self.document.get(bid) if bid else None
+        if body is None or body.kind != 'solid':
+            self.toast('Kliknij bryłę (nie szkic).')
+            return
+        if bid in self.bool_ids:
+            self.bool_ids.remove(bid)
+        else:
+            self.bool_ids.append(bid)
+        self.update_bool_status()
+
+    def update_bool_status(self):
+        self.view.tints = {}
+        for index, bid in enumerate(self.bool_ids):
+            self.view.tints[bid] = TINT_BASE if index == 0 else TINT_TOOL
+        names = [self.document.get(i).name for i in self.bool_ids if self.document.get(i)]
+        if not names:
+            text = 'Kliknij bryłę bazową.'
+        elif len(names) == 1:
+            text = f'Baza: {names[0]}\nKliknij bryłę-narzędzie.'
+        else:
+            text = f'Baza: {names[0]}\nNarzędzia: {", ".join(names[1:])}'
+        self.bool_status.setText(text)
+        self.refresh()
+
+    def reset_bool(self):
+        self.bool_ids = []
+        self.update_bool_status()
+
+    def apply_bool(self):
+        if self.busy:
+            return
+        if len(self.bool_ids) < 2:
+            self.toast('Wybierz bryłę bazową i co najmniej jedną bryłę-narzędzie.')
+            return
+        bodies = [self.document.get(i) for i in self.bool_ids]
+        base, tools = bodies[0], bodies[1:]
+        ids = set(self.bool_ids)
+        op = self.bool_op.currentData()
+
+        def build():
+            result = base.changed(kernel.boolean(op, base.shape, [b.shape for b in tools]))
+            return [result if b.id == base.id else b for b in self.document.bodies if b.id == base.id or b.id not in ids]
+
+        def apply(new):
+            self.document.commit(new)
+            self.selected = [base.id]
+
+        self.run_operation('Operacja na bryłach', build, apply, after=lambda: self.set_mode(None))
+
+    # ---------- zaokrąglenia ----------
+    def pick_edge(self, x, y, shift, ctrl):
+        hit = self.view.nearest_edge(x, y)
+        if hit is None:
+            if not ctrl:
+                self.edges = {}
+            self.update_mod_status()
+            return
+        bid, index = hit[0], hit[1]
+        body = self.document.get(bid)
+        if body is None or body.kind != 'solid':
+            return
+        ids = set(kernel.edge_chain(body.shape, index)) if shift else {index}
+        if not ctrl or bid not in self.edges:
+            current = set() if not ctrl else self.edges.get(bid, set())
+            self.edges = {bid: current}
+        current = self.edges[bid]
+        if ids <= current:
+            current -= ids
+        else:
+            current |= ids
+        self.update_mod_status()
+
+    def update_mod_status(self):
+        count = sum(len(v) for v in self.edges.values())
+        self.mod_status.setText(f'Zaznaczone krawędzie: {count}' if count else 'Kliknij krawędź bryły w widoku 3D.')
+        self.refresh()
+
+    def clear_edges(self):
+        self.edges = {}
+        self.update_mod_status()
+
+    def apply_mod(self):
+        if self.busy:
+            return
+        if len(self.edges) != 1 or not next(iter(self.edges.values()), None):
+            self.toast('Zaznacz krawędzie jednej bryły.')
+            return
+        bid, ids = next(iter(self.edges.items()))
+        body = self.document.get(bid)
+        size, kind = self.mod_size.value(), self.mod_kind.currentData()
+        ids = set(ids)
+
+        def apply(new):
+            self.document.commit([new if b.id == body.id else b for b in self.document.bodies])
+            self.selected = [body.id]
+
+        self.run_operation('Zaokrąglanie' if kind == 'fillet' else 'Fazowanie', lambda: body.changed(kernel.blend(body.shape, ids, size, kind)), apply,
+                           after=lambda: self.set_mode(None))
+
+    # ---------- lustro ----------
+    def pick_mirror(self, x, y):
+        if self.mir_plane.currentData() == 'face':
+            hit = self.view.pick_face(x, y)
+            if hit is None:
+                self.toast('Kliknij ścianę bryły, względem której ma być odbicie.')
+                return
+            self.mirror_face = (hit[1], hit[2])
+            if self.mirror_id is None:
+                self.mirror_id = hit[0]
+        else:
+            bid = self.view.pick_body(x, y)
+            if bid is None or self.document.get(bid).kind == 'sketch':
+                self.toast('Kliknij bryłę do odbicia.')
+                return
+            self.mirror_id = bid
+        self.view.tints = {self.mirror_id: TINT_BASE}
+        self.update_mirror_status()
+
+    def update_mirror_status(self):
+        body = self.document.get(self.mirror_id) if self.mirror_id else None
+        text = f'Obiekt: {body.name}' if body else 'Kliknij obiekt do odbicia.'
+        if self.mir_plane.currentData() == 'face':
+            text += '\nŚciana: wskazana' if self.mirror_face else '\nKliknij ścianę jako płaszczyznę odbicia.'
+        self.mir_status.setText(text)
+        self.refresh()
+
+    def apply_mirror(self):
+        if self.busy:
+            return
+        body = self.document.get(self.mirror_id) if self.mirror_id else None
+        if body is None:
+            self.toast('Kliknij obiekt do odbicia.')
+            return
+        which = self.mir_plane.currentData()
+        face = self.mirror_face
+        if which == 'face' and face is None:
+            self.toast('Kliknij ścianę jako płaszczyznę odbicia.')
+            return
+        keep = self.mir_keep.isChecked()
+
+        def build():
+            if which == 'face':
+                shape = kernel.mirror_plane(body.shape, face[0], face[1])
+            else:
+                shape = kernel.mirror(body.shape, which)
+            mirrored = Body(body.name + ' — odbicie', shape, body.kind, body.plane).prepared()
+            if keep:
+                return [*self.document.bodies, mirrored]
+            return [mirrored if b.id == body.id else b for b in self.document.bodies]
+
+        def apply(new):
+            self.document.commit(new)
+            self.selected = [new[-1].id if keep else body.id]
+
+        self.run_operation('Odbicie lustrzane', build, apply, after=lambda: self.set_mode(None))
+
+    # ---------- model i odświeżanie ----------
+    def refresh(self, fit=False):
+        live = {b.id for b in self.document.bodies}
+        self.selected = [i for i in self.selected if i in live]
+        self.edges = {i: es for i, es in self.edges.items() if i in live}
+        self.view.set_models(self.document.bodies, self.selected, self.edges)
+        if fit:
+            self.view.fit_all()
+        self.undo_button.setEnabled(self.document.can_undo and not self.busy)
+        self.redo_button.setEnabled(self.document.can_redo and not self.busy)
+        name = self.document.path.name if self.document.path else 'Nowy projekt'
+        self.setWindowTitle(f"{'● ' if self.document.dirty else ''}{name} — RCCAD")
+
+    def run_operation(self, label, function, apply, fit=False, after=None):
+        if self.busy:
+            return
+        self.busy = True
+        self.hint(label + '…')
+        work = _Work(function)
+        self._work = work
+
+        def finish():
+            self.busy = False
+            self._work = None
+
+        def done(value):
+            try:
+                apply(value)
+            except Exception as exc:
+                self.toast(str(exc))
+            finally:
+                finish()
+                self.refresh(fit)
+                if after:
+                    after()
+
+        def failed(message):
+            finish()
+            self.toast(message + ' Dotychczasowy model pozostał bez zmian.', 7000)
+            self.refresh()
+
+        work.signals.done.connect(done)
+        work.signals.failed.connect(failed)
+        self.pool.start(work)
+
+    def add_prepared(self, body):
+        self.document.commit((*self.document.bodies, body))
+        self.selected = [body.id] if self.mode != 'sketch' else self.selected
+
+    def undo(self):
+        if not self.busy:
+            self.document.undo()
+            self.edges = {}
+            self.refresh()
+
+    def redo(self):
+        if not self.busy:
+            self.document.redo()
+            self.edges = {}
+            self.refresh()
+
+    def delete_selected(self):
+        if not self.busy and self.selected and self.mode is None:
+            self.document.commit([b for b in self.document.bodies if b.id not in self.selected])
+            self.selected = []
+            self.refresh()
+
+    # ---------- plik ----------
+    def file_menu(self):
+        menu = QMenu(self)
+        for text, fn in (('Nowy projekt\tCtrl+N', self.new_project), ('Otwórz…\tCtrl+O', self.open_project), ('Zapisz\tCtrl+S', self.save_project),
+                         ('Zapisz jako…', lambda: self.save_project(True)), None, ('Importuj model (STEP, BREP, STL, DXF)…', self.import_model),
+                         ('Eksportuj (STEP, STL, BREP, DXF)…', self.export_model), None, ('Dopasuj widok do modelu', lambda: self.view.fit_all())):
+            if fn is None:
+                menu.addSeparator()
+            else:
+                menu.addAction(text, fn)
+        menu.exec(self.tools['file'].mapToGlobal(self.tools['file'].rect().bottomLeft()))
+
+    def confirm_discard(self):
+        if self.busy:
+            self.toast('Trwa operacja — poczekaj na jej zakończenie.')
+            return False
+        if not self.document.dirty:
+            return True
+        return QMessageBox.question(self, 'Niezapisane zmiany', 'Odrzucić niezapisane zmiany?', QMessageBox.Discard | QMessageBox.Cancel,
+                                    QMessageBox.Cancel) == QMessageBox.Discard
+
+    def new_project(self):
+        if self.confirm_discard():
+            self.set_mode(None)
+            self.document = Document()
+            self.selected = []
+            self.refresh(True)
+
+    def open_project(self):
+        if not self.confirm_discard():
+            return
+        path, _ = QFileDialog.getOpenFileName(self, 'Otwórz projekt', '', 'RCCAD (*.rccadx)')
+        if path:
+            self.set_mode(None)
+
+            def loaded(doc):
+                self.document = doc
+                self.selected = []
+
+            self.run_operation('Otwieranie projektu', lambda: Document.load(path), loaded, True)
+
+    def save_project(self, save_as=False):
+        path = self.document.path
+        if save_as or path is None:
+            value, _ = QFileDialog.getSaveFileName(self, 'Zapisz projekt', str(path or 'Projekt.rccadx'), 'RCCAD (*.rccadx)')
+            if not value:
+                return
+            path = Path(value)
+            if path.suffix.lower() != '.rccadx':
+                path = path.with_suffix('.rccadx')
+        self.run_operation('Zapisywanie projektu', lambda: self.document.save(path), lambda _: None)
+
+    def import_model(self):
+        path, _ = QFileDialog.getOpenFileName(self, 'Importuj model', '', 'Modele CAD (*.step *.stp *.brep *.brp *.stl *.dxf)')
+        if not path:
+            return
+
+        def build():
+            return [Body(Path(path).stem if i == 0 else f'{Path(path).stem} {i + 1}', s, kind).prepared()
+                    for i, (s, kind) in enumerate(kernel.import_shapes(path))]
+
+        def add(bodies):
+            if not bodies:
+                raise kernel.CadError('Plik nie zawiera obsługiwanej geometrii.')
+            self.document.commit((*self.document.bodies, *bodies))
+            self.selected = [b.id for b in bodies]
+
+        self.run_operation('Importowanie modelu', build, add, True)
+
+    def export_model(self):
+        bodies = [b for b in self.document.bodies if b.id in self.selected] if self.selected else [b for b in self.document.bodies if b.visible]
+        if not bodies:
+            self.toast('Brak geometrii do eksportu.')
+            return
+        path, _ = QFileDialog.getSaveFileName(self, 'Eksportuj zaznaczone lub widoczne obiekty', 'Model.step',
+                                              'STEP (*.step);;STL (*.stl);;BREP (*.brep);;DXF — szkice (*.dxf)')
+        if path:
+            self.run_operation('Eksportowanie', lambda: kernel.export_shapes([b.shape for b in bodies], path), lambda _: None)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Escape and not self.busy:
+            if self.mode == 'sketch' and self.points:
+                self.points = []
+                self.dim.hide()
+                self.view.set_preview_mesh(None)
+                self.show_sketch_hint()
+            elif self.mode is not None:
+                self.set_mode(None)
+            else:
+                self.selected = []
+                self.refresh()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def closeEvent(self, event):
+        if self.confirm_discard():
+            event.accept()
+        else:
+            event.ignore()
