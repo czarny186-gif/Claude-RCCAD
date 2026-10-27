@@ -5,7 +5,7 @@ on:
     paths: ['native/**', '.github/workflows/native-windows.yml']
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 jobs:
   windows-exe:
     runs-on: windows-latest
@@ -27,6 +27,33 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: python -m unittest discover -s tests -v
+      - name: Capture UI screenshots (diagnostics)
+        continue-on-error: true
+        env:
+          QT_OPENGL: software
+        shell: pwsh
+        run: |
+          python tests/shots.py shots
+          Get-ChildItem shots | Select-Object Name,Length
+      - name: Publish screenshots to ci-shots branch
+        if: always()
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          if (Test-Path shots) {
+            $dest = Join-Path $env:RUNNER_TEMP 'shots'
+            New-Item -ItemType Directory -Force -Path $dest | Out-Null
+            Copy-Item shots\* $dest
+            Set-Location $dest
+            git init -q
+            git config user.name "ci"; git config user.email "ci@example.com"
+            git checkout -q -b ci-shots
+            git add -A
+            git commit -q -m "screenshots $env:GITHUB_SHA"
+            git push -q -f "https://x-access-token:$($env:GH_TOKEN)@github.com/$($env:GITHUB_REPOSITORY).git" ci-shots
+          }
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Build native Windows application
         run: python -m PyInstaller --noconfirm RCCAD.spec
       - name: Run the actual packaged EXE
