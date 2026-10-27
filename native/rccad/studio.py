@@ -1346,13 +1346,13 @@ class StudioWindow(QMainWindow):
     # ---------- plik ----------
     def file_menu(self):
         menu = QMenu(self)
-        for text, fn in (('Nowy projekt\tCtrl+N', self.new_project), ('Otwórz…\tCtrl+O', self.open_project), ('Zapisz\tCtrl+S', self.save_project),
+        for entry in (('Nowy projekt\tCtrl+N', self.new_project), ('Otwórz…\tCtrl+O', self.open_project), ('Zapisz\tCtrl+S', self.save_project),
                          ('Zapisz jako…', lambda: self.save_project(True)), None, ('Importuj model (STEP, BREP, STL, DXF)…', self.import_model), ('Importuj SVG jako szkice…', self.import_svg),
                          ('Eksportuj (STEP, STL, BREP, DXF)…', self.export_model), None, ('Dopasuj widok do modelu', lambda: self.view.fit_all())):
-            if fn is None:
+            if entry is None:
                 menu.addSeparator()
             else:
-                menu.addAction(text, fn)
+                menu.addAction(entry[0], lambda _=False, f=entry[1]: f())
         menu.exec(self.tools['file'].mapToGlobal(self.tools['file'].rect().bottomLeft()))
 
     def confirm_discard(self):

@@ -198,6 +198,38 @@ class StudioTests(unittest.TestCase):
         w=self.w;a=Body('A',k.box(20,20,20)).prepared();w.document.commit([a]);w.refresh();w.set_mode('mod')
         w.edges={a.id:{0}};w.mod_size.setValue(2);w.update_mod_preview();self.assertTrue(w.view.preview_items)
 
+    def test_file_menu_opens_with_all_entries(self):
+        from PySide6.QtWidgets import QMenu
+        seen=[]
+        with patch.object(QMenu,'exec',lambda menu,*a:seen.append([x.text() for x in menu.actions() if not x.isSeparator()])):
+            self.w.file_menu()
+        self.assertEqual(len(seen[0]),8);self.assertTrue(seen[0][0].startswith('Nowy'))
+
+    def test_context_menu_opens(self):
+        from PySide6.QtWidgets import QMenu
+        a,b=self.make_solids();seen=[]
+        with patch.object(QMenu,'exec',lambda menu,*a:seen.append(len(menu.actions()))),patch.object(self.w.view,'pick_body',return_value=a.id):
+            self.w.context_menu(5,5)
+        self.assertEqual(seen,[5])
+
+    def test_every_button_click_raises_no_exception(self):
+        import sys
+        from PySide6.QtWidgets import QMenu,QToolButton,QPushButton
+        errors=[];old=sys.excepthook;sys.excepthook=lambda *a:errors.append(a[1])
+        try:
+            with patch.object(QMenu,'exec',lambda *a:None):
+                for key in ('file','sketch','extrude','bool','mod','mirror','mod','bool'):self.w.tools[key].click();self.app.processEvents()
+                self.w.tools['sketch'].click();self.w.plane_picked('XY')
+                for b in list(self.w.shape_buttons.values()):b.click();self.app.processEvents()
+                for m in self.w.shape_bar.findChildren(QToolButton):
+                    if m.menu():
+                        for act in m.menu().actions():act.trigger();self.app.processEvents()
+                self.w.set_mode(None)
+                for b in self.w.cube.findChildren(QToolButton):b.click()
+                for b in (*self.w.pad_buttons.values(),self.w.layers,self.w.layers,self.w.home,self.w.undo_button,self.w.redo_button):b.click();self.app.processEvents()
+        finally:sys.excepthook=old
+        self.assertEqual(errors,[])
+
 
 if __name__=='__main__':
     unittest.main()
