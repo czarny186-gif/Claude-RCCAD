@@ -4,13 +4,14 @@ from pathlib import Path
 from PySide6.QtCore import QEvent, QObject, QRunnable, QSize, Qt, QThreadPool, QTimer, Signal
 from PySide6.QtGui import QCursor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFrame, QHBoxLayout,
-                               QLabel, QMainWindow, QMenu, QMessageBox, QPushButton, QToolButton, QVBoxLayout, QWidget)
+                               QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPushButton, QToolButton, QVBoxLayout, QWidget)
 from . import kernel
 from . import shell_ui as ui
 from .document import Body, Document
 from .viewport import CadView
 
-NEED = {'rect': 2, 'centerRect': 2, 'circle': 2, 'circle2': 2, 'circle3': 3, 'ellipse': 2, 'slot': 3, 'polygon': 2}
+NEED = {'rect': 2, 'centerRect': 2, 'rect3': 3, 'circle': 2, 'circle2': 2, 'circle3': 3, 'ellipse': 2, 'slot': 3, 'polygon': 2,
+        'arc': 3, 'point': 1, 'construction': 2, 'measure': 2, 'text': 1, 'trim': 1, 'line': 2, 'circleTangent2': 3}
 HINTS = {
     'rect': ['Kliknij pierwszy narożnik prostokąta.', 'Kliknij przeciwległy narożnik.'],
     'centerRect': ['Kliknij środek prostokąta.', 'Kliknij narożnik.'],
@@ -20,10 +21,23 @@ HINTS = {
     'ellipse': ['Kliknij środek elipsy.', 'Kliknij narożnik opisanego prostokąta.'],
     'slot': ['Kliknij środek pierwszego końca.', 'Kliknij środek drugiego końca.', 'Kliknij punkt określający szerokość.'],
     'polygon': ['Kliknij środek wielokąta.', 'Kliknij wierzchołek.'],
+    'rect3': ['Kliknij pierwszy punkt podstawy.', 'Kliknij drugi punkt podstawy.', 'Kliknij punkt określający wysokość.'],
+    'arc': ['Kliknij początek łuku.', 'Kliknij punkt na łuku.', 'Kliknij koniec łuku.'],
+    'point': ['Kliknij miejsce punktu.'],
+    'construction': ['Kliknij początek linii konstrukcyjnej.', 'Kliknij koniec.'],
+    'measure': ['Kliknij pierwszy punkt pomiaru.', 'Kliknij drugi punkt.'],
+    'text': ['Wpisz treść w panelu i kliknij miejsce na szkicu.'],
+    'trim': ['Nożyczki: kliknij fragment szkicu, który ma zniknąć.'],
+    'line': ['Kliknij początek linii.', 'Kliknij kolejny punkt (Enter lub podwójne kliknięcie kończy, kliknięcie w pierwszy punkt zamyka obrys).'],
+    'circleTangent2': ['Kliknij pierwszą linię.', 'Kliknij drugą linię.', 'Kliknij, aby wskazać wielkość okręgu.'],
 }
-LATER = {'line', 'arc', 'text', 'point', 'construction', 'measure', 'trim', 'rect3', 'circleTangent2'}
+LATER = set()
 TINT_BASE = (.30, .55, .95, 1)
 TINT_TOOL = (.95, .55, .20, 1)
+
+
+def kernel_close(a, b, tol=1e-3):
+    return abs(a[0] - b[0]) <= tol and abs(a[1] - b[1]) <= tol
 
 
 class _Signals(QObject):
@@ -81,6 +95,7 @@ class StudioWindow(QMainWindow):
         self.bool_ids: list[str] = []
         self.mirror_id = None
         self.mirror_face = None
+        self.tangent_lines = []
         self._work = None
         self.resize(1400, 850)
         self.setStyleSheet(ui.STYLE)
@@ -93,6 +108,7 @@ class StudioWindow(QMainWindow):
         self.view.sketchClicked.connect(self.sketch_clicked)
         self.view.viewClicked.connect(self.view_clicked)
         self.view.viewHover.connect(self.view_hover)
+        self.view.contextRequested.connect(self.context_menu)
         self._build_overlays()
         self.view.installEventFilter(self)
         self._preview_timer = QTimer(self)
@@ -273,6 +289,8 @@ class StudioWindow(QMainWindow):
         lay.addWidget(self.ex_target_row)
         self.ex_sym = QCheckBox('Symetrycznie w obie strony')
         lay.addWidget(self.ex_sym)
+        self.ex_two = QCheckBox('Dwie strony niezależnie')
+        lay.addWidget(self.ex_two)
         self.ex_status = QLabel('Kliknij zamknięty profil szkicu.')
         self.ex_status.setObjectName('status')
         self.ex_status.setWordWrap(True)
@@ -288,6 +306,11 @@ class StudioWindow(QMainWindow):
         self.ex_distance = _spin(20, -1e5, 1e5)
         self.ex_distance.setFixedWidth(130)
         bar.addWidget(self.ex_distance)
+        self.ex_dist2_label = QLabel('Odległość 2')
+        bar.addWidget(self.ex_dist2_label)
+        self.ex_distance2 = _spin(10, 0, 1e5)
+        self.ex_distance2.setFixedWidth(120)
+        bar.addWidget(self.ex_distance2)
         self.ex_apply = QPushButton('✓ Zastosuj')
         self.ex_apply.clicked.connect(self.apply_extrude)
         bar.addWidget(self.ex_apply)
@@ -297,7 +320,9 @@ class StudioWindow(QMainWindow):
         self.ex_bar.adjustSize()
         self.ex_bar.hide()
         self.ex_distance.valueChanged.connect(lambda *_: self._preview_timer.start())
-        self.ex_sym.toggled.connect(lambda *_: self._preview_timer.start())
+        self.ex_sym.toggled.connect(lambda on: (self.ex_two.setChecked(False) if on else None, self._preview_timer.start()))
+        self.ex_two.toggled.connect(self._two_toggled)
+        self.ex_distance2.valueChanged.connect(lambda *_: self._preview_timer.start())
         self.ex_op.currentIndexChanged.connect(self._extrude_options_changed)
         self.ex_target.currentIndexChanged.connect(lambda *_: self._preview_timer.start())
 
@@ -383,9 +408,56 @@ class StudioWindow(QMainWindow):
         apply_.clicked.connect(self.apply_mirror)
         lay.addWidget(apply_)
         self.mir_panel.hide()
-        self.panels = (self.ex_panel, self.ex_bar, self.bool_panel, self.mod_panel, self.mir_panel)
+        # --- panel tekstu (narzędzie Tekst) ---
+        self.text_panel = ui.panel(262)
+        self.text_panel.setParent(v)
+        lay = QVBoxLayout(self.text_panel)
+        lay.setContentsMargins(13, 13, 13, 13)
+        lay.setSpacing(9)
+        title = QLabel('Tekst')
+        title.setObjectName('title')
+        lay.addWidget(title)
+        self.text_edit = QLineEdit('RCCAD')
+        lay.addWidget(_row('Treść', self.text_edit))
+        self.text_size = _spin(10, .5, 1000)
+        lay.addWidget(_row('Wysokość liter', self.text_size))
+        note = QLabel('Kliknij miejsce na szkicu, aby wstawić tekst.')
+        note.setObjectName('small')
+        note.setWordWrap(True)
+        lay.addWidget(note)
+        self.text_panel.hide()
+        # --- wpisywanie wymiaru z klawiatury ---
+        self.dim_edit = QLineEdit(v)
+        self.dim_edit.setFixedWidth(130)
+        self.dim_edit.setStyleSheet('QLineEdit{background:#fff;border:2px solid #2087d6;border-radius:6px;padding:5px;color:#1c5a8f;font:bold 13px "Segoe UI";}')
+        self.dim_edit.hide()
+        self.dim_edit.returnPressed.connect(self.apply_typed)
+        # --- pasek transformacji (przesuń / obróć zaznaczone) ---
+        self.tbar = QFrame(v)
+        self.tbar.setObjectName('panel')
+        tl = QHBoxLayout(self.tbar)
+        tl.setContentsMargins(13, 9, 13, 9)
+        tl.setSpacing(7)
+        self.t_spins = {}
+        for key, label in (('x', 'Przesuń X'), ('y', 'Y'), ('z', 'Z'), ('rx', 'Obrót X°'), ('ry', 'Y°'), ('rz', 'Z°')):
+            tl.addWidget(QLabel(label))
+            spin = _spin(0, -1e6, 1e6, suffix='', decimals=2)
+            spin.setFixedWidth(82)
+            tl.addWidget(spin)
+            self.t_spins[key] = spin
+        self.t_copy = QCheckBox('Kopia')
+        tl.addWidget(self.t_copy)
+        go = QPushButton('Zastosuj')
+        go.clicked.connect(self.apply_transform)
+        tl.addWidget(go)
+        self.tbar.adjustSize()
+        self.tbar.hide()
+        self.panels = (self.ex_panel, self.ex_bar, self.bool_panel, self.mod_panel, self.mir_panel, self.text_panel)
         for p in self.panels:
             p.adjustSize()
+        self.ex_dist2_label.hide()
+        self.ex_distance2.hide()
+        self.ex_bar.adjustSize()
 
     def _layout_overlays(self):
         W, H = self.view.width(), self.view.height()
@@ -401,8 +473,10 @@ class StudioWindow(QMainWindow):
         top = 150 if self.shape_bar.isVisible() else 88
         self.ex_panel.move(18, 170)
         self.ex_bar.move(230, 170)
-        for p in (self.bool_panel, self.mod_panel, self.mir_panel):
+        for p in (self.bool_panel, self.mod_panel, self.mir_panel, self.text_panel):
             p.move(18, top)
+        self.tbar.move(18, H - 130)
+        self.tbar.raise_()
         self.hint_label.adjustSize()
         self.hint_label.move(18, H - 36)
         self.notice.adjustSize()
@@ -448,7 +522,9 @@ class StudioWindow(QMainWindow):
             return
         self.mode = mode
         self.points = []
+        self.tangent_lines = []
         self.dim.hide()
+        self.dim_edit.hide()
         self.view.set_preview_mesh(None)
         self.view.sketch_plane = None
         self.view.sketch_tool = None
@@ -496,11 +572,11 @@ class StudioWindow(QMainWindow):
         self._layout_overlays()
 
     def choose_tool(self, name, button=None):
-        if name in LATER:
-            self.toast('To narzędzie szkicu dołączę w następnym etapie — na razie działają prostokąty, okręgi, elipsa, fasolka i wielokąt.')
-            return
         self.tool = name
         self.points = []
+        self.tangent_lines = []
+        self.text_panel.setVisible(name == 'text')
+        self.dim_edit.hide()
         self.dim.hide()
         self.view.set_preview_mesh(None)
         self.view.sketch_tool = name
@@ -529,27 +605,53 @@ class StudioWindow(QMainWindow):
         self.view.setCursor(Qt.CrossCursor)
         self.shape_bar.show()
         self.points = []
-        self.choose_tool(self.tool if self.tool not in LATER else 'rect')
-        self.shape_buttons.get(self._group_button(self.tool), self.shape_buttons['rect']).setChecked(True)
+        self.choose_tool(self.tool)
         self._layout_overlays()
 
-    def _shape(self, points):
-        return kernel.sketch_shape(self.tool, self.sketch_plane, points, self.sides)
+    def _wire(self, points, closed=False):
+        t = self.tool
+        if t in ('line', 'construction'):
+            return kernel.polyline(self.sketch_plane, points, closed)
+        if t == 'arc':
+            return kernel.arc3(self.sketch_plane, points)
+        if t == 'rect3':
+            return kernel.rect3(self.sketch_plane, points)
+        if t == 'point':
+            return kernel.point_marker(self.sketch_plane, points[0])
+        return kernel.sketch_shape(t, self.sketch_plane, points, self.sides)
+
+    def _preview_points(self, pts):
+        t, need = self.tool, NEED.get(self.tool, 2)
+        if t == 'line':
+            return kernel.polyline(self.sketch_plane, pts) if len(pts) >= 2 else None
+        if t in ('measure', 'text', 'trim', 'circleTangent2'):
+            return kernel.polyline(self.sketch_plane, pts) if t == 'measure' and len(pts) == 2 else None
+        if len(pts) == need:
+            return self._wire(pts)
+        if t == 'circle3' and len(pts) == 2:
+            return kernel.sketch_shape('circle2', self.sketch_plane, pts)
+        if t in ('arc', 'rect3', 'slot') and len(pts) == 2:
+            return kernel.polyline(self.sketch_plane, pts)
+        return None
 
     def sketch_moved(self, plane, u, v):
-        if self.mode != 'sketch' or not self.points or self.busy:
+        if self.mode != 'sketch' or self.busy:
+            return
+        if self.tool == 'circleTangent2':
+            if len(self.tangent_lines) == 2:
+                try:
+                    shape = kernel.circle_tangent2(self.sketch_plane, *self.tangent_lines, (u, v))
+                    self.view.set_preview_mesh(kernel.display_mesh(shape), line_color=(1, .48, .05, 1), width=2.5)
+                except kernel.CadError:
+                    self.view.set_preview_mesh(None)
+            return
+        if not self.points:
             return
         pts = [*self.points, (u, v)]
-        need = NEED.get(self.tool, 2)
         try:
-            if len(pts) == need:
-                shape = self._shape(pts)
-            elif self.tool == 'circle3' and len(pts) == 2:
-                shape = kernel.sketch_shape('circle2', self.sketch_plane, pts)
-            else:
-                shape = None
+            shape = self._preview_points(pts)
             self.view.set_preview_mesh(kernel.display_mesh(shape) if shape is not None else None, line_color=(1, .48, .05, 1), width=2.5)
-        except kernel.CadError:
+        except Exception:
             self.view.set_preview_mesh(None)
         self.show_dimension(pts)
 
@@ -557,6 +659,8 @@ class StudioWindow(QMainWindow):
         import math
         a = self.points[0]
         b = pts[-1]
+        if self.tool == 'line' and len(pts) > 2:
+            a = pts[-2]
         du, dv = abs(b[0] - a[0]), abs(b[1] - a[1])
         if self.tool in ('rect', 'ellipse'):
             text = f'{du:.2f} × {dv:.2f} mm'
@@ -575,25 +679,157 @@ class StudioWindow(QMainWindow):
         self.dim.show()
         self.dim.raise_()
 
+    def _cursor_edge(self):
+        pos = self.view.mapFromGlobal(QCursor.pos())
+        return self.view.nearest_edge(pos.x(), pos.y())
+
+    def _edge_line(self):
+        hit = self._cursor_edge()
+        body = self.document.get(hit[0]) if hit else None
+        if body is None or body.kind != 'sketch':
+            raise kernel.CadError('Kliknij prostą linię narysowanego szkicu.')
+        edge = body.shape.Edges()[hit[1]]
+        if edge.geomType() != 'LINE':
+            raise kernel.CadError('Wybierz prostą linię (nie łuk ani okrąg).')
+        return kernel._line_uv(edge, body.plane)
+
     def sketch_clicked(self, plane, u, v):
-        if self.mode != 'sketch' or self.busy or self.tool in LATER:
+        if self.mode != 'sketch' or self.busy:
+            return
+        t = self.tool
+        try:
+            if t == 'trim':
+                self.trim_at_cursor()
+                return
+            if t == 'circleTangent2':
+                if len(self.tangent_lines) < 2:
+                    self.tangent_lines.append(self._edge_line())
+                    self.hint(f'Płaszczyzna {self.sketch_plane}. ' + HINTS[t][len(self.tangent_lines)])
+                    return
+                shape = kernel.circle_tangent2(plane, *self.tangent_lines, (u, v))
+                self.tangent_lines = []
+                self.view.set_preview_mesh(None)
+                self.create_sketch([shape])
+                return
+            if t == 'text':
+                shapes = kernel.text_shape(plane, self.text_edit.text(), u, v, self.text_size.value())
+                self.create_sketch(shapes, 'Tekst')
+                return
+        except kernel.CadError as exc:
+            self.toast(str(exc))
+            return
+        if t == 'line':
+            if self.points and kernel_close(self.points[0], (u, v)) and len(self.points) >= 3:
+                self.finish_line(closed=True)
+                return
+            if self.points and kernel_close(self.points[-1], (u, v)):
+                self.finish_line()
+                return
+            self.points.append((u, v))
+            self.show_sketch_hint()
             return
         self.points.append((u, v))
-        if len(self.points) < NEED[self.tool]:
+        if len(self.points) < NEED[t]:
             self.show_sketch_hint()
             return
         points, self.points = list(self.points), []
+        self.complete(points)
+
+    def finish_line(self, closed=False):
+        points, self.points = list(self.points), []
+        self.dim.hide()
+        self.view.set_preview_mesh(None)
+        if len(points) < 2:
+            self.show_sketch_hint()
+            return
+        try:
+            self.create_sketch([kernel.polyline(self.sketch_plane, points, closed)])
+        except kernel.CadError as exc:
+            self.toast(str(exc))
+
+    def complete(self, points):
+        """Zebrane punkty tworzą gotowy element szkicu (lub pomiar)."""
         self.dim.hide()
         self.view.set_preview_mesh(None)
         try:
-            shape = self._shape(points)
+            if self.tool == 'measure':
+                (a, b) = points[:2]
+                import math
+                self.toast(f'Odległość: {math.hypot(b[0] - a[0], b[1] - a[1]):.3f} mm   (ΔU {abs(b[0] - a[0]):.3f}, ΔV {abs(b[1] - a[1]):.3f})', 8000)
+                self.show_sketch_hint()
+                return
+            shape = self._wire(points)
         except kernel.CadError as exc:
             self.toast(str(exc))
             self.show_sketch_hint()
             return
-        name = f'Szkic {plane}'
-        self.run_operation('Tworzenie szkicu', lambda: Body(name, shape, 'sketch', plane).prepared(), self.add_prepared)
+        self.create_sketch([shape], 'Konstrukcja' if self.tool == 'construction' else ('Punkt' if self.tool == 'point' else None))
+
+    def create_sketch(self, shapes, label=None):
+        plane = self.sketch_plane
+        name = f'{label or "Szkic"} {plane}'
+        self.run_operation('Tworzenie szkicu', lambda: [Body(name, sh, 'sketch', plane).prepared() for sh in shapes], self.add_prepared_many)
         self.show_sketch_hint()
+
+    def add_prepared_many(self, bodies):
+        self.document.commit((*self.document.bodies, *bodies))
+        if self.mode != 'sketch':
+            self.selected = [b.id for b in bodies]
+
+    def trim_at_cursor(self):
+        hit = self._cursor_edge()
+        body = self.document.get(hit[0]) if hit else None
+        if body is None or body.kind != 'sketch':
+            raise kernel.CadError('Kliknij fragment szkicu.')
+        index = hit[1]
+
+        def build():
+            wires = kernel.remove_edge(body.shape, index)
+            made = [Body(body.name, w, 'sketch', body.plane).prepared() for w in wires]
+            out = []
+            for b in self.document.bodies:
+                out.extend(made if b.id == body.id else [b])
+            return out
+
+        self.run_operation('Nożyczki', build, lambda bodies: self.document.commit(bodies))
+
+    # ---------- wpisywanie wymiarów z klawiatury ----------
+    def open_dim_input(self, first=''):
+        if self.mode != 'sketch' or not self.points or self.tool in ('arc', 'rect3', 'circle3', 'slot', 'text', 'trim', 'circleTangent2', 'point'):
+            return False
+        self.dim_edit.setText(first)
+        pos = self.view.mapFromGlobal(QCursor.pos())
+        self.dim_edit.move(pos.x() + 16, pos.y() + 14)
+        self.dim_edit.show()
+        self.dim_edit.raise_()
+        self.dim_edit.setFocus()
+        self.dim_edit.setPlaceholderText({'rect': 'szer wys', 'centerRect': 'szer wys', 'ellipse': 'rx ry'}.get(self.tool, 'długość  kąt°' if self.tool in ('line', 'construction', 'measure') else 'promień'))
+        return True
+
+    def apply_typed(self):
+        import re, math
+        text = self.dim_edit.text()
+        self.dim_edit.hide()
+        self.view.setFocus()
+        nums = [float(x) for x in re.findall(r'[-+]?\d+(?:[.,]\d+)?', text.replace(',', '.'))]
+        if not nums:
+            return
+        u0, v0 = self.points[-1] if self.tool == 'line' else self.points[0]
+        t = self.tool
+        if t in ('rect', 'ellipse', 'centerRect'):
+            w, h = nums[0], nums[1] if len(nums) > 1 else nums[0]
+            end = (u0 + (w / 2 if t == 'centerRect' else w), v0 + (h / 2 if t == 'centerRect' else h))
+        elif t in ('circle', 'polygon', 'circle2'):
+            end = (u0 + nums[0], v0)
+        else:
+            ang = math.radians(nums[1]) if len(nums) > 1 else 0.0
+            end = (u0 + nums[0] * math.cos(ang), v0 + nums[0] * math.sin(ang))
+        if t == 'line':
+            self.points.append(end)
+            self.show_sketch_hint()
+            return
+        points, self.points = [*self.points, end], []
+        self.complete(points)
 
     # ---------- klikanie w widoku ----------
     def view_hover(self, x, y):
@@ -638,6 +874,14 @@ class StudioWindow(QMainWindow):
             self.ex_op.setCurrentIndex(0)
         self._extrude_options_changed()
 
+    def _two_toggled(self, on):
+        if on:
+            self.ex_sym.setChecked(False)
+        self.ex_dist2_label.setVisible(on)
+        self.ex_distance2.setVisible(on)
+        self.ex_bar.adjustSize()
+        self._preview_timer.start()
+
     def _extrude_options_changed(self, *_):
         self.ex_target_row.setVisible(self.ex_op.currentData() != 'new')
         self.ex_panel.adjustSize()
@@ -660,6 +904,8 @@ class StudioWindow(QMainWindow):
         body = self.document.get(self.extrude_body_id)
         if body is None:
             raise kernel.CadError('Wybierz profil szkicu.')
+        if self.ex_two.isChecked():
+            return kernel.extrude2(body.shape, body.plane, self.ex_distance.value(), self.ex_distance2.value())
         return kernel.extrude(body.shape, body.plane, self.ex_distance.value(), self.ex_sym.isChecked())
 
     def update_extrude_preview(self):
@@ -684,9 +930,10 @@ class StudioWindow(QMainWindow):
             self.toast('Wybierz bryłę docelową.')
             return
         distance, symmetric = self.ex_distance.value(), self.ex_sym.isChecked()
+        two, d2 = self.ex_two.isChecked(), self.ex_distance2.value()
 
         def build():
-            tool = kernel.extrude(body.shape, body.plane, distance, symmetric)
+            tool = kernel.extrude2(body.shape, body.plane, distance, d2) if two else kernel.extrude(body.shape, body.plane, distance, symmetric)
             if base is None:
                 return [*self.document.bodies, Body('Wyciągnięcie', tool).prepared()]
             result = base.changed(kernel.boolean(op, base.shape, [tool]))
@@ -866,6 +1113,7 @@ class StudioWindow(QMainWindow):
         self.view.set_models(self.document.bodies, self.selected, self.edges)
         if fit:
             self.view.fit_all()
+        self.tbar.setVisible(self.mode is None and any(self.document.get(i) for i in self.selected))
         self.undo_button.setEnabled(self.document.can_undo and not self.busy)
         self.redo_button.setEnabled(self.document.can_redo and not self.busy)
         name = self.document.path.name if self.document.path else 'Nowy projekt'
@@ -905,7 +1153,8 @@ class StudioWindow(QMainWindow):
 
     def add_prepared(self, body):
         self.document.commit((*self.document.bodies, body))
-        self.selected = [body.id] if self.mode != 'sketch' else self.selected
+        if self.mode != 'sketch':
+            self.selected = [body.id]
 
     def undo(self):
         if not self.busy:
@@ -925,11 +1174,92 @@ class StudioWindow(QMainWindow):
             self.selected = []
             self.refresh()
 
+    # ---------- transformacja i menu kontekstowe ----------
+    def apply_transform(self):
+        if self.busy:
+            return
+        targets = [self.document.get(i) for i in self.selected if self.document.get(i)]
+        if not targets:
+            return
+        v = {k: spin.value() for k, spin in self.t_spins.items()}
+        copy = self.t_copy.isChecked()
+
+        def build():
+            out = []
+            for b in targets:
+                moved = kernel.transform(b.shape, (v['x'], v['y'], v['z']), (v['rx'], v['ry'], v['rz']))
+                out.append(Body(b.name + (' — kopia' if copy else ''), moved, b.kind, b.plane).prepared() if copy else b.changed(moved))
+            return out
+
+        def apply(new):
+            if copy:
+                self.document.commit((*self.document.bodies, *new))
+                self.selected = [b.id for b in new]
+            else:
+                mapping = {t.id: n for t, n in zip(targets, new)}
+                self.document.commit([mapping.get(b.id, b) for b in self.document.bodies])
+
+        self.run_operation('Transformacja', build, apply)
+
+    def duplicate_selected(self):
+        if self.busy or not self.selected:
+            return
+        targets = [self.document.get(i) for i in self.selected if self.document.get(i)]
+
+        def build():
+            return [Body(b.name + ' — kopia', kernel.transform(b.shape, (10, 10, 0)), b.kind, b.plane).prepared() for b in targets]
+
+        def apply(new):
+            self.document.commit((*self.document.bodies, *new))
+            self.selected = [b.id for b in new]
+
+        self.run_operation('Duplikowanie', build, apply)
+
+    def hide_selected(self):
+        if self.busy or not self.selected:
+            return
+        from dataclasses import replace
+        self.document.commit([replace(b, visible=False) if b.id in self.selected else b for b in self.document.bodies])
+        self.selected = []
+        self.refresh()
+
+    def show_all(self):
+        from dataclasses import replace
+        if self.busy:
+            return
+        self.document.commit([replace(b, visible=True) for b in self.document.bodies])
+        self.refresh()
+
+    def context_menu(self, x, y):
+        if self.busy or self.mode is not None:
+            return
+        bid = self.view.pick_body(x, y)
+        if bid and bid not in self.selected:
+            self.selected = [bid]
+            self.refresh()
+        menu = QMenu(self)
+        has = bool(self.selected)
+        for text, fn, on in (('Duplikuj', self.duplicate_selected, has), ('Ukryj', self.hide_selected, has), ('Pokaż wszystko', self.show_all, True),
+                             ('Usuń\tDelete', self.delete_selected, has), ('Eksportuj zaznaczone…', self.export_model, has)):
+            action = menu.addAction(text, fn)
+            action.setEnabled(on)
+        menu.exec(QCursor.pos())
+
+    def import_svg(self):
+        path, _ = QFileDialog.getOpenFileName(self, 'Importuj SVG jako szkice na płaszczyźnie XY', '', 'SVG (*.svg)')
+        if not path:
+            return
+
+        def build():
+            return [Body(f'{Path(path).stem} {i + 1}', w, 'sketch', 'XY').prepared() for i, w in enumerate(kernel.svg_profiles(path, 'XY'))]
+
+        self.run_operation('Importowanie SVG', build, self.add_prepared_many, True)
+
     # ---------- plik ----------
     def file_menu(self):
         menu = QMenu(self)
         for text, fn in (('Nowy projekt\tCtrl+N', self.new_project), ('Otwórz…\tCtrl+O', self.open_project), ('Zapisz\tCtrl+S', self.save_project),
-                         ('Zapisz jako…', lambda: self.save_project(True)), None, ('Importuj model (STEP, BREP, STL, DXF)…', self.import_model),
+                         ('Zapisz jako…', lambda: self.save_project(True)), None, ('Importuj model (STEP, BREP, STL, DXF)…', self.import_model), ('Importuj SVG jako szkice…', self.import_svg),
                          ('Eksportuj (STEP, STL, BREP, DXF)…', self.export_model), None, ('Dopasuj widok do modelu', lambda: self.view.fit_all())):
             if fn is None:
                 menu.addSeparator()
@@ -1005,8 +1335,24 @@ class StudioWindow(QMainWindow):
             self.run_operation('Eksportowanie', lambda: kernel.export_shapes([b.shape for b in bodies], path), lambda _: None)
 
     def keyPressEvent(self, event):
+        key = event.key()
+        if self.mode == 'sketch' and not self.busy:
+            if key in (Qt.Key_Return, Qt.Key_Enter) and self.tool == 'line' and self.points:
+                self.finish_line()
+                event.accept()
+                return
+            text = event.text()
+            if text and text in '0123456789.-,' and self.points and not self.dim_edit.isVisible():
+                if self.open_dim_input(text):
+                    event.accept()
+                    return
+        if key == Qt.Key_Escape and self.dim_edit.isVisible():
+            self.dim_edit.hide()
+            event.accept()
+            return
         if event.key() == Qt.Key_Escape and not self.busy:
-            if self.mode == 'sketch' and self.points:
+            if self.mode == 'sketch' and (self.points or self.tangent_lines):
+                self.tangent_lines = []
                 self.points = []
                 self.dim.hide()
                 self.view.set_preview_mesh(None)

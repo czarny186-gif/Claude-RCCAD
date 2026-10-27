@@ -39,6 +39,7 @@ class CadView(gl.GLViewWidget):
     viewHover = Signal(float, float)
     bodyClicked = Signal(str, bool)
     selectionCleared = Signal()
+    contextRequested = Signal(float, float)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -490,7 +491,11 @@ class CadView(gl.GLViewWidget):
             return
         x, y, button = self._press
         self._press = None
-        if button != Qt.LeftButton or np.hypot(event.position().x()-x, event.position().y()-y) > 4:
+        moved = np.hypot(event.position().x()-x, event.position().y()-y) > 4
+        if button == Qt.RightButton and not moved and self.click_mode:
+            self.contextRequested.emit(x, y)
+            return
+        if button != Qt.LeftButton or moved:
             return
         if self.plane_pick:
             name = self.plane_at(x, y)

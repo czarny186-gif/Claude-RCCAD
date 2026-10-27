@@ -353,3 +353,195 @@ def display_mesh(shape, tolerance=.12):
     return DisplayMesh(np.asarray([v.toTuple() for v in vertices], dtype=np.float32).reshape(-1, 3),
                        np.asarray(triangles, dtype=np.uint32).reshape(-1, 3), edges,
                        box_bounds.center.toTuple(), max(box_bounds.xlen, box_bounds.ylen, box_bounds.zlen, 1))
+
+
+# ---------- etap 2: linie, łuki, punkty, prostokąt 3-punktowy, okrąg styczny, tekst, SVG ----------
+def _vec(plane, p):
+    return cq.Vector(*to_world(plane, float(p[0]), float(p[1])))
+
+
+def polyline(plane, points, closed=False):
+    """Łamana (lub zamknięty wielokąt) z punktów (U, V)."""
+    if plane not in PLANE_AXES:
+        raise CadError("Nieznana płaszczyzna szkicu.")
+    pts = [(float(u), float(v)) for u, v in points]
+    clean = [pts[0]]
+    for p in pts[1:]:
+        if np.hypot(p[0] - clean[-1][0], p[1] - clean[-1][1]) > 1e-4:
+            clean.append(p)
+    if closed and len(clean) > 2 and np.hypot(clean[0][0] - clean[-1][0], clean[0][1] - clean[-1][1]) <= 1e-4:
+        clean.pop()
+    if len(clean) < 2 or (closed and len(clean) < 3):
+        raise CadError("Za mało różnych punktów.")
+    seq = clean + [clean[0]] if closed else clean
+    edges = [cq.Edge.makeLine(_vec(plane, a), _vec(plane, b)) for a, b in zip(seq[:-1], seq[1:])]
+    return cq.Wire.assembleEdges(edges)
+
+
+def arc3(plane, points):
+    (a, b, c) = points[:3]
+    d = 2 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]))
+    if abs(d) < 1e-9:
+        raise CadError("Trzy punkty leżą na jednej prostej - nie wyznaczają łuku.")
+    return cq.Wire.assembleEdges([cq.Edge.makeThreePointArc(_vec(plane, a), _vec(plane, b), _vec(plane, c))])
+
+
+def rect3(plane, points):
+    """Prostokąt 3-punktowy: dwa punkty podstawy i punkt określający wysokość."""
+    (ax, ay), (bx, by), (cx, cy) = [(float(u), float(v)) for u, v in points[:3]]
+    length = float(np.hypot(bx - ax, by - ay))
+    if length < 1e-4:
+        raise CadError("Podstawa prostokąta jest za krótka.")
+    ux, uy = (bx - ax) / length, (by - ay) / length
+    h = (cx - ax) * -uy + (cy - ay) * ux
+    if abs(h) < 1e-4:
+        raise CadError("Wysokość prostokąta jest za mała.")
+    nx, ny = -uy * h, ux * h
+    return polyline(plane, [(ax, ay), (bx, by), (bx + nx, by + ny), (ax + nx, ay + ny)], True)
+
+
+def point_marker(plane, p, size=.6):
+    return cq.Workplane(plane).center(float(p[0]), float(p[1])).circle(size).wire().val()
+
+
+def _line_uv(edge, plane):
+    i, j = PLANE_AXES[plane]
+    a, b = edge.startPoint(), edge.endPoint()
+    pa, pb = (a.toTuple()[i], a.toTuple()[j]), (b.toTuple()[i], b.toTuple()[j])
+    return pa, pb
+
+
+def circle_tangent2(plane, line1, line2, hint):
+    """Okrąg styczny do dwóch prostych (każda jako para punktów UV); środek na dwusiecznej bliższej punktowi `hint`."""
+    def norm(l):
+        (ax, ay), (bx, by) = l
+        n = float(np.hypot(bx - ax, by - ay))
+        if n < 1e-9:
+            raise CadError("Linia jest zdegenerowana.")
+        dx, dy = (bx - ax) / n, (by - ay) / n
+        return ax, ay, dx, dy
+    ax, ay, dx1, dy1 = norm(line1)
+    bx, by, dx2, dy2 = norm(line2)
+    det = dx1 * -dy2 - dy1 * -dx2
+    if abs(det) < 1e-9:
+        raise CadError("Linie są równoległe - okrąg styczny nie jest jednoznaczny.")
+    t = ((bx - ax) * -dy2 - (by - ay) * -dx2) / det
+    px, py = ax + t * dx1, ay + t * dy1
+    best = None
+    for s in (1, -1):
+        bxv, byv = dx1 + s * dx2, dy1 + s * dy2
+        n = float(np.hypot(bxv, byv))
+        if n < 1e-9:
+            continue
+        bxv, byv = bxv / n, byv / n
+        proj = (hint[0] - px) * bxv + (hint[1] - py) * byv
+        cx, cy = px + bxv * proj, py + byv * proj
+        dist = abs((cx - px) * -dy1 + (cy - py) * dx1)
+        gap = float(np.hypot(hint[0] - cx, hint[1] - cy))
+        if dist > 1e-4 and (best is None or gap < best[0]):
+            best = (gap, cx, cy, dist)
+    if best is None:
+        raise CadError("Nie można wyznaczyć okręgu stycznego.")
+    return cq.Workplane(plane).center(best[1], best[2]).circle(best[3]).wire().val()
+
+
+def text_shape(plane, text, u, v, size=10.0):
+    """Kontury liter (zewnętrzne druty ścian leżących na płaszczyźnie szkicu); wymaga czcionki systemowej."""
+    text = str(text).strip()
+    if not text:
+        raise CadError("Wpisz treść tekstu.")
+    solid = cq.Workplane(plane).center(float(u), float(v)).text(text, float(size), 0.2, combine=False).val()
+    axis = {"XY": 2, "XZ": 1, "YZ": 0}[plane]
+    wires = [f.outerWire() for f in (solid.Faces() if solid is not None else [])
+             if abs(f.Center().toTuple()[axis]) < 1e-5 and abs(abs(f.normalAt().toTuple()[axis]) - 1) < 1e-3]
+    if not wires:
+        raise CadError("Nie udało się utworzyć tekstu (brak czcionki).")
+    return wires
+
+
+def extrude2(wire, plane, d1, d2):
+    """Wyciągnięcie w dwie strony niezależnie: d1 po normalnej, d2 przeciwnie."""
+    d1, d2 = float(d1), float(d2)
+    if not isfinite(d1) or not isfinite(d2) or d1 < 0 or d2 < 0 or d1 + d2 < 1e-5:
+        raise CadError("Obie odległości muszą być nieujemne, a ich suma większa od zera.")
+    n = cq.Vector(NORMALS[plane])
+    base = wire.translate(n.multiply(-d2))
+    if not base.IsClosed():
+        raise CadError("Profil musi być zamknięty.")
+    return valid(cq.Solid.extrudeLinear(base, [], n.multiply(d1 + d2)))
+
+
+def remove_edge(shape, index):
+    """Nożyczki: usuwa jedną krawędź szkicu; zwraca listę pozostałych krawędzi złożonych w druty (może być pusta)."""
+    edges = shape.Edges()
+    if not 0 <= index < len(edges):
+        raise CadError("Nieprawidłowa krawędź.")
+    rest = [e for i, e in enumerate(edges) if i != index]
+    if not rest:
+        return []
+    try:
+        return [cq.Wire.assembleEdges(rest)]
+    except Exception:
+        return [cq.Wire.assembleEdges([e]) for e in rest]
+
+
+def svg_profiles(path, plane="XY"):
+    """Prosty import SVG: rect, circle, ellipse, polygon, polyline oraz path z M/L/H/V/Z (współrzędne mm, oś Y odwrócona)."""
+    import re
+    import xml.etree.ElementTree as ET
+    text = Path(path).read_text(encoding="utf-8", errors="ignore")
+    if len(text) > 5_000_000:
+        raise CadError("Plik SVG jest zbyt duży.")
+    root = ET.fromstring(text)
+    num = lambda s: [float(x) for x in re.findall(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?", s or "")]
+    flip = lambda p: (p[0], -p[1])
+    out = []
+    for el in root.iter():
+        tag = el.tag.split("}")[-1]
+        g = lambda k, d=0.0: float(num(el.get(k))[0]) if num(el.get(k)) else d
+        try:
+            if tag == "rect":
+                x, y, w, h = g("x"), g("y"), g("width"), g("height")
+                out.append(polyline(plane, [flip(p) for p in [(x, y), (x + w, y), (x + w, y + h), (x, y + h)]], True))
+            elif tag == "circle":
+                out.append(cq.Workplane(plane).center(g("cx"), -g("cy")).circle(g("r")).wire().val())
+            elif tag == "ellipse":
+                out.append(cq.Workplane(plane).center(g("cx"), -g("cy")).ellipse(g("rx"), g("ry")).wire().val())
+            elif tag in ("polygon", "polyline"):
+                n = num(el.get("points"))
+                pts = [flip((n[i], n[i + 1])) for i in range(0, len(n) - 1, 2)]
+                out.append(polyline(plane, pts, tag == "polygon"))
+            elif tag == "path":
+                subs, cur, pos, start = [], [], (0.0, 0.0), (0.0, 0.0)
+                for cmd, args in re.findall(r"([MmLlHhVvZz])([^MmLlHhVvZz]*)", el.get("d", "")):
+                    n = num(args)
+                    rel = cmd.islower()
+                    c = cmd.upper()
+                    if c == "Z":
+                        if len(cur) > 2:
+                            subs.append((cur, True))
+                        cur, pos = [], start
+                    elif c in "ML":
+                        for i in range(0, len(n) - 1, 2):
+                            pos = (pos[0] + n[i], pos[1] + n[i + 1]) if rel else (n[i], n[i + 1])
+                            if c == "M" and i == 0:
+                                if len(cur) > 1:
+                                    subs.append((cur, False))
+                                cur, start = [pos], pos
+                            else:
+                                cur.append(pos)
+                    elif c == "H":
+                        for v in n:
+                            pos = (pos[0] + v if rel else v, pos[1]); cur.append(pos)
+                    elif c == "V":
+                        for v in n:
+                            pos = (pos[0], pos[1] + v if rel else v); cur.append(pos)
+                if len(cur) > 1:
+                    subs.append((cur, False))
+                for pts, closed in subs:
+                    out.append(polyline(plane, [flip(p) for p in pts], closed))
+        except CadError:
+            continue
+    if not out:
+        raise CadError("W pliku SVG nie znaleziono obsługiwanych kształtów (prostokąt, okrąg, elipsa, wielokąt, ścieżka z liniami).")
+    return out

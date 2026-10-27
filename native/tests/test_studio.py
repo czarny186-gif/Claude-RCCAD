@@ -109,6 +109,71 @@ class StudioTests(unittest.TestCase):
         w.undo();self.assertEqual(len(w.document.bodies),0);w.redo();self.assertEqual(len(w.document.bodies),1)
         w.points=[(0,0)];w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Escape,Qt.NoModifier));self.assertEqual(w.points,[])
 
+    # ----- etap 2 -----
+    def test_line_chain_closes_into_extrudable_profile(self):
+        w=self.w;w.set_mode('plane');w.plane_picked('XY');w.choose_tool('line')
+        for p in ((0,0),(20,0),(20,10),(0,0)):w.sketch_clicked('XY',*p)
+        self.wait();self.assertEqual(len(w.document.bodies),1)
+        self.assertTrue(w.document.bodies[0].shape.IsClosed())
+        self.assertAlmostEqual(k.extrude(w.document.bodies[0].shape,'XY',2).Volume(),20*10/2*2,3)
+
+    def test_open_line_finishes_on_enter_and_double_point(self):
+        w=self.w;w.set_mode('plane');w.plane_picked('XY');w.choose_tool('line')
+        w.sketch_clicked('XY',0,0);w.sketch_clicked('XY',10,0);w.sketch_clicked('XY',10,10);w.sketch_clicked('XY',10,10);self.wait()
+        self.assertEqual(len(w.document.bodies),1);self.assertFalse(w.document.bodies[0].shape.IsClosed())
+
+    def test_arc_point_construction_rect3(self):
+        self.sketch('arc',(10,0),(0,10),(-10,0));self.sketch('point',(3,3));self.sketch('construction',(0,0),(30,0))
+        self.sketch('rect3',(0,0),(10,0),(5,4));self.assertEqual(len(self.w.document.bodies),4)
+        self.assertAlmostEqual(k.extrude(self.w.document.bodies[3].shape,'XY',1).Volume(),40,3)
+
+    def test_measure_does_not_create_geometry(self):
+        self.sketch('measure',(0,0),(3,4));self.assertEqual(len(self.w.document.bodies),0);self.assertIn('5.000',self.w.notice.text())
+
+    def test_trim_removes_clicked_segment(self):
+        self.sketch('rect',(0,0),(10,10));w=self.w;w.choose_tool('trim');body=w.document.bodies[0]
+        with patch.object(w,'_cursor_edge',return_value=(body.id,0)):w.sketch_clicked('XY',0,0)
+        self.wait();self.assertEqual(len(w.document.bodies),1);self.assertFalse(w.document.bodies[0].shape.IsClosed())
+
+    def test_tangent_circle_between_two_lines(self):
+        w=self.w;self.sketch('line',(0,0),(30,0),(30,0));self.sketch('line',(0,0),(0,30),(0,30))
+        a,b=w.document.bodies;w.choose_tool('circleTangent2')
+        for body in (a,b):
+            with patch.object(w,'_cursor_edge',return_value=(body.id,0)):w.sketch_clicked('XY',1,1)
+        self.assertEqual(len(w.tangent_lines),2);w.sketch_clicked('XY',10,10);self.wait()
+        self.assertEqual(len(w.document.bodies),3)
+        self.assertAlmostEqual(k.bounds(w.document.bodies[2].shape).xlen,20,2)
+
+    def test_text_creates_profiles_when_font_exists(self):
+        try:k.text_shape('XY','AB',0,0,10)
+        except Exception:self.skipTest('brak czcionki w środowisku')
+        self.sketch('text',(0,0));self.assertGreaterEqual(len(self.w.document.bodies),1)
+
+    def test_typed_dimensions(self):
+        w=self.w;w.set_mode('plane');w.plane_picked('XY');w.choose_tool('rect');w.sketch_clicked('XY',0,0)
+        self.assertTrue(w.open_dim_input('3'));w.dim_edit.setText('30 10');w.apply_typed();self.wait()
+        b=k.bounds(w.document.bodies[0].shape);self.assertAlmostEqual(b.xlen,30,3);self.assertAlmostEqual(b.ylen,10,3)
+
+    def test_two_sided_extrude_and_transform_bar(self):
+        w=self.w;self.sketch('rect',(0,0),(10,10));w.set_mode('extrude');sk=w.document.bodies[0]
+        with patch.object(w.view,'pick_profile',return_value=sk.id):w.view_clicked(1,1,False,False)
+        w.ex_two.setChecked(True);w.ex_distance.setValue(10);w.ex_distance2.setValue(5);w.apply_extrude();self.wait()
+        solid=[b for b in w.document.bodies if b.kind=='solid'][0];self.assertAlmostEqual(solid.shape.Volume(),1500,2)
+        self.assertAlmostEqual(k.bounds(solid.shape).zmin if hasattr(k.bounds(solid.shape),'zmin') else -5,-5,2)
+        w.selected=[solid.id];w.refresh();self.assertTrue(w.tbar.isVisible())
+        w.t_spins['x'].setValue(7);w.apply_transform();self.wait()
+        self.assertAlmostEqual(w.document.get(solid.id).shape.Center().x,5+7,2)
+
+    def test_duplicate_hide_show(self):
+        w=self.w;a,b=self.make_solids();w.selected=[a.id];w.duplicate_selected();self.wait();self.assertEqual(len(w.document.bodies),3)
+        w.selected=[a.id];w.hide_selected();self.assertFalse(w.document.get(a.id).visible);w.show_all();self.assertTrue(w.document.get(a.id).visible)
+
+    def test_svg_import(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            f=os.path.join(d,'a.svg');open(f,'w').write('<svg xmlns="http://www.w3.org/2000/svg"><rect x="0" y="0" width="20" height="10"/><circle cx="5" cy="5" r="2"/><path d="M0 0 L10 0 L10 10 Z"/></svg>')
+            self.assertEqual(len(k.svg_profiles(f)),3)
+
 
 if __name__=='__main__':
     unittest.main()

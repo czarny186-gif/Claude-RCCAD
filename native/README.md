@@ -103,3 +103,8 @@ Okno odtwarza wersję HTML: pływające przyciski (Plik, Szkic, Wyciągnij, Bool
 wybór płaszczyzny, szkicowanie klik–klik z podglądem i wymiarem przy kursorze, wyciąganie kliknięciem w profil z podglądem na żywo,
 Boolean przez klikanie brył (baza + narzędzia), zaokrąglenia/fazy przez klikanie krawędzi, lustro, kostka widoków, cofnij/ponów, tryby myszy.
 Stare okno z panelem bocznym: `RCCAD Desktop.exe --classic`.
+
+### Etap 2
+Dodane: linia (łamana, zamykanie przez kliknięcie w pierwszy punkt, Enter kończy), łuk 3-punktowy, punkt, linia konstrukcyjna, pomiar, nożyczki,
+prostokąt 3-punktowy, okrąg styczny do dwóch linii, tekst, wpisywanie wymiarów z klawiatury w trakcie szkicu, wyciągnięcie „Dwie strony niezależnie”,
+pasek przesuń/obróć (z kopią), menu kontekstowe (prawy przycisk), import SVG.
