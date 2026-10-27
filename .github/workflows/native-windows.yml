@@ -1,0 +1,93 @@
+name: RCCAD Desktop - Windows EXE
+on:
+  push:
+    branches: [main, desktop-native]
+    paths: ['native/**', '.github/workflows/native-windows.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-exe:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    defaults:
+      run:
+        working-directory: native
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+          cache: pip
+          cache-dependency-path: 'native/requirements*.txt'
+      - name: Install verified packages
+        run: python -m pip install -r requirements-build.txt
+      - name: Test CAD kernel and project format
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m unittest discover -s tests -v
+      - name: Build native Windows application
+        run: python -m PyInstaller --noconfirm RCCAD.spec
+      - name: Run the actual packaged EXE
+        env:
+          QT_QPA_PLATFORM: offscreen
+        shell: pwsh
+        run: |
+          $exe = Join-Path $pwd 'dist\RCCAD Desktop\RCCAD Desktop.exe'
+          $report = Join-Path $pwd 'packaged-selftest.json'
+          $p = Start-Process -FilePath $exe -ArgumentList '--self-test','--report',$report -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Packaged EXE failed: $($p.ExitCode)" }
+          if (!(Test-Path $report)) { throw 'Packaged EXE did not produce its readiness report' }
+          $data = Get-Content $report -Raw | ConvertFrom-Json
+          if (!$data.passed) { throw 'Packaged application self-test failed' }
+          Get-Content $report
+      - name: Create portable download
+        shell: pwsh
+        run: |
+          Copy-Item README.md,THIRD_PARTY.md -Destination 'dist\RCCAD Desktop'
+          Copy-Item packaged-selftest.json -Destination 'dist\RCCAD Desktop\selftest_windows.json'
+          Compress-Archive -Path 'dist\RCCAD Desktop' -DestinationPath RCCAD-Desktop-Windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RCCAD-Desktop-Windows-x64
+          path: native/RCCAD-Desktop-Windows-x64.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-build-diagnostics
+          path: |
+            native/packaged-selftest.json
+            native/build/RCCAD/warn-RCCAD.txt
+          if-no-files-found: ignore
+
+  publish-preview:
+    needs: windows-exe
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: RCCAD-Desktop-Windows-x64
+          path: release
+      - name: Publish the tested Windows preview
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          release_tag="desktop-v0.2.0-${GITHUB_RUN_NUMBER}"
+          if gh release view "$release_tag" >/dev/null 2>&1; then
+            gh release upload "$release_tag" release/*.zip --clobber
+          else
+            gh release create "$release_tag" release/*.zip \
+              --target "$GITHUB_SHA" --prerelease \
+              --title "RCCAD Desktop 0.2 — Windows x64" \
+              --notes-file native/RELEASE_NOTES.md
+          fi
