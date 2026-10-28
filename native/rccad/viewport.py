@@ -6,7 +6,9 @@ import numpy as np
 import pyqtgraph as pg
 import pyqtgraph.opengl as gl
 from pyqtgraph.opengl import shaders
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QPointF, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPolygonF
+from PySide6.QtWidgets import QWidget
 from PySide6.QtGui import QVector3D, QVector4D, QColor
 from OpenGL import GL
 from PySide6.QtGui import QMatrix4x4
@@ -63,6 +65,82 @@ VIEWS = {  # (elewacja, azymut) kamery pyqtgraph
     'iso': (25, -55), 'XY': (90, -90), 'XZ': (0, -90), 'YZ': (0, 0),
     'Z': (90, -90), '-Z': (-90, -90), 'X': (0, 0), '-X': (0, 180), 'Y': (0, 90), '-Y': (0, -90),
 }
+
+
+
+class Overlay2D(QWidget):
+    """Przezroczysta warstwa 2D nad widokiem 3D (jak <canvas> w wersji HTML): strzałki i uchwyty są ZAWSZE na wierzchu,
+    nigdy nie chowają się za bryłą. Rysuje też środki szkiców i znacznik przyciągania."""
+
+    def __init__(self, view):
+        super().__init__(view)
+        self.view = view
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WA_NoSystemBackground)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+
+    def paintEvent(self, event):
+        v = self.view
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        try:
+            for c in v.sketch_centers:
+                xy = v.project_one(c)
+                if xy is None:
+                    continue
+                p.setPen(QPen(QColor('#087d55'), 1.6))
+                p.setBrush(QColor('#ffffff'))
+                p.drawEllipse(QPointF(*xy), 4.5, 4.5)
+                p.drawLine(QPointF(xy[0] - 9, xy[1]), QPointF(xy[0] + 9, xy[1]))
+                p.drawLine(QPointF(xy[0], xy[1] - 9), QPointF(xy[0], xy[1] + 9))
+            for h in v.handles:
+                geo = v.handle_geometry(h)
+                if geo is None:
+                    continue
+                ring = h.get('ring')
+                color = QColor.fromRgbF(*h.get('color', (.94, .6, .13, 1)))
+                if ring:
+                    c, axis, radius = (np.asarray(ring[0], float), np.asarray(ring[1], float), float(ring[2]))
+                    e1 = np.cross(axis, (0, 0, 1.0) if abs(axis[2]) < .9 else (1.0, 0, 0))
+                    e1 /= np.linalg.norm(e1)
+                    e2 = np.cross(axis, e1)
+                    pts = np.array([c + radius * (np.cos(a) * e1 + np.sin(a) * e2) for a in np.linspace(0, 2 * np.pi, 73)])
+                    xy, _, w = v.project_points(pts)
+                    pen = QPen(color, 3)
+                    pen.setCapStyle(Qt.RoundCap)
+                    p.setPen(pen)
+                    p.setBrush(Qt.NoBrush)
+                    p.drawPolyline(QPolygonF([QPointF(float(a), float(b)) for a, b in xy]))
+                start, end = geo['start'], geo['end']
+                pen = QPen(color, 5)
+                pen.setCapStyle(Qt.RoundCap)
+                p.setPen(pen)
+                p.drawLine(QPointF(*start), QPointF(*end))
+                p.setPen(Qt.NoPen)
+                p.setBrush(color)
+                p.drawEllipse(QPointF(*end), 10, 10)
+                label = h.get('label')
+                if label:
+                    p.setPen(QColor('#ffffff'))
+                    font = QFont('Segoe UI')
+                    font.setBold(True)
+                    font.setPixelSize(12)
+                    p.setFont(font)
+                    p.drawText(QPointF(end[0] - 4 * max(1, len(label)), end[1] + 4), label)
+            snap = v.snap_marker
+            if snap is not None:
+                xy, text = snap
+                p.setPen(QPen(QColor('#e06c12'), 2))
+                p.setBrush(QColor('#ffffff'))
+                p.drawEllipse(QPointF(*xy), 5.5, 5.5)
+                if text:
+                    font = QFont('Segoe UI')
+                    font.setPixelSize(12)
+                    p.setFont(font)
+                    p.setPen(QColor('#9a4b0b'))
+                    p.drawText(QPointF(xy[0] + 10, xy[1] - 10), text)
+        finally:
+            p.end()
 
 
 class CadView(gl.GLViewWidget):
@@ -142,33 +220,74 @@ class CadView(gl.GLViewWidget):
         self.handles = []             # uchwyty-strzałki: dict(id, tip, dir, color, ring=(środek, oś, promień)|None)
         self.handle_items = []
         self._handle_drag = None
+        self.snap_label = None
+        self.sketch_centers = []
+        self.snap_marker = None       # ((x, y), etykieta) - przyciąganie jak w wersji HTML
+        self.snapper = None           # funkcja (x, y, (u, v)) -> (u, v, etykieta) ustawiana przez Studio
+        self._cache = {}              # id bryły -> (klucz, elementy GL): bez przebudowy całej sceny przy każdej zmianie
+        self.overlay = Overlay2D(self)
+        self.overlay.setGeometry(0, 0, self.width(), self.height())
+        self.overlay.raise_()
+
+    def update(self, *args):
+        super().update(*args)
+        ov = getattr(self, 'overlay', None)
+        if ov is not None:
+            ov.update()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.overlay.setGeometry(0, 0, self.width(), self.height())
+        self.overlay.raise_()
+
+    def project_one(self, point):
+        xy, _, w = self.project_points(np.asarray([point], float))
+        if not np.isfinite(xy[0]).all() or w[0] <= 0:
+            return None
+        return float(xy[0][0]), float(xy[0][1])
 
     def set_models(self, bodies, selected_bodies=(), selected_edges=None):
         self._set_hover_edge(None)
-        for item in self.model_items + self.highlight_items:
-            self.removeItem(item)
-        self.model_items, self.highlight_items = [], []
         self.bodies = tuple(bodies)
         self.selected_bodies = set(selected_bodies)
         self.selected_edges = selected_edges or {}
+        live = set()
+        centers = []
         for body in self.bodies:
             if not body.visible or body.mesh is None:
                 continue
+            live.add(body.id)
             mesh = body.mesh
             color = self.tints.get(body.id) or SOLID_COLOR
             picked = body.id in self.selected_bodies
-            if len(mesh.triangles):
-                item = gl.GLMeshItem(vertexes=mesh.vertices, faces=mesh.triangles, smooth=True, color=color, shader='rccad', drawEdges=False)
-                item.setGLOptions('opaque')
-                self.addItem(item)
-                self.model_items.append(item)
-            for index, points in mesh.edges.items():
-                selected = index in self.selected_edges.get(body.id, set())
-                base = SKETCH_COLOR if body.kind == 'sketch' else EDGE_COLOR
-                hot = selected or picked
-                line = gl.GLLinePlotItem(pos=points, color=PREVIEW_COLOR if hot else base, width=3.5 if hot else (2.5 if body.kind == 'sketch' else 1.5), antialias=True)
-                self.addItem(line)
-                self.model_items.append(line)
+            sel = frozenset(self.selected_edges.get(body.id, ()))
+            key = (id(mesh), tuple(color), picked, sel, body.kind)
+            cached = self._cache.get(body.id)
+            if cached is None or cached[0] != key:
+                if cached is not None:
+                    for item in cached[1]:
+                        self.removeItem(item)
+                items = []
+                if len(mesh.triangles):
+                    item = gl.GLMeshItem(vertexes=mesh.vertices, faces=mesh.triangles, smooth=True, color=color, shader='rccad', drawEdges=False)
+                    item.setGLOptions('opaque')
+                    self.addItem(item)
+                    items.append(item)
+                for index, points in mesh.edges.items():
+                    hot = index in sel or picked
+                    base = SKETCH_COLOR if body.kind == 'sketch' else EDGE_COLOR
+                    line = gl.GLLinePlotItem(pos=points, color=PREVIEW_COLOR if hot else base, width=3.5 if hot else (2.3 if body.kind == 'sketch' else 1.5), antialias=False)
+                    self.addItem(line)
+                    items.append(line)
+                self._cache[body.id] = (key, items)
+            if body.kind == 'sketch' and len(mesh.vertices) + len(mesh.edges):
+                pts = np.concatenate([e.reshape(-1, 3) for e in mesh.edges.values()]) if mesh.edges else mesh.vertices
+                if len(pts):
+                    centers.append(((pts.min(axis=0) + pts.max(axis=0)) / 2).tolist())
+        for bid in [b for b in self._cache if b not in live]:
+            for item in self._cache.pop(bid)[1]:
+                self.removeItem(item)
+        self.sketch_centers = centers
         self.update()
 
     def fit_all(self):
@@ -257,9 +376,16 @@ class CadView(gl.GLViewWidget):
             return None
         return kernel.uv_of(plane, hit[1])
 
-    def _snap(self, point, event=None):
+    def _snap(self, point, event=None, pos=None):
         if event is not None and event.modifiers() & Qt.AltModifier:
+            self.snap_label = None
             return point
+        if pos is None and event is not None:
+            pos = event.position()
+        if self.snapper is not None and pos is not None:
+            u, v, label = self.snapper(pos.x(), pos.y(), point)
+            self.snap_label = label
+            return u, v
         distance = float(self.opts['distance'])
         step = 10 ** math.floor(math.log10(max(distance / 40, 1e-3)))
         return round(point[0] / step) * step, round(point[1] / step) * step
@@ -337,57 +463,45 @@ class CadView(gl.GLViewWidget):
         self.update()
 
     def set_handles(self, handles):
-        """Uchwyty-strzałki: lista dict(id, tip, dir, color, ring=(środek, oś, promień)|None). Pusta lista usuwa."""
-        for item in self.handle_items:
-            self.removeItem(item)
-        self.handle_items = []
+        """Uchwyty-strzałki rysowane na wierzchu (Overlay2D): dict(id, start, tip, dir, color, label, min_px, ring=(środek, oś, promień)|None)."""
         self.handles = []
-        size = float(self.opts['distance']) * .06
         for h in handles or []:
-            tip = np.asarray(h['tip'], dtype=float)
             d = np.asarray(h['dir'], dtype=float)
             d = d / np.linalg.norm(d)
-            color = h.get('color', (1, .45, 0, 1))
-            side = np.cross(d, (0, 0, 1) if abs(d[2]) < .9 else (1, 0, 0))
-            side = side / np.linalg.norm(side) * size * .45
-            other = np.cross(d, side)
-            base = tip - d * size
-            parts = [[tip - d * size * 2.5, tip], [tip, base + side], [tip, base - side], [tip, base + other], [tip, base - other]]
-            ring = h.get('ring')
-            if ring:
-                c, axis, radius = np.asarray(ring[0], float), np.asarray(ring[1], float), float(ring[2])
-                axis = axis / np.linalg.norm(axis)
-                e1 = np.cross(axis, (0, 0, 1) if abs(axis[2]) < .9 else (1, 0, 0))
-                e1 /= np.linalg.norm(e1)
-                e2 = np.cross(axis, e1)
-                parts.append([c + radius * (np.cos(a) * e1 + np.sin(a) * e2) for a in np.linspace(0, 2 * np.pi, 73)])
-            for pts in parts:
-                line = gl.GLLinePlotItem(pos=np.array(pts, dtype=np.float32), color=color, width=4, antialias=True)
-                line.setDepthValue(10)
-                self.addItem(line)
-                self.handle_items.append(line)
-            self.handles.append(dict(id=h['id'], tip=tip, dir=d))
+            tip = np.asarray(h['tip'], dtype=float)
+            start = np.asarray(h.get('start', tip - d), dtype=float)
+            self.handles.append(dict(h, dir=d, tip=tip, start=start))
         self.update()
 
     def set_handle(self, tip, direction):
-        """Pojedynczy uchwyt wyciągnięcia (zgodność wsteczna)."""
         self.set_handles([] if tip is None else [dict(id='ex', tip=tip, dir=direction)])
 
-    def _screen_dir(self, tip, d):
-        length = float(self.opts['distance']) * .2
-        xy, _, _ = self.project_points(np.array([tip, tip + d * length]))
-        return xy[0], xy[1], length
+    def handle_geometry(self, h):
+        """Ekranowe położenie strzałki: start, koniec (min. 34 px) oraz kierunek jednostkowy i skala px/mm."""
+        s0 = self.project_one(h['start'])
+        s1 = self.project_one(h['tip'])
+        u = self.project_one(h['start'] + h['dir'] * 10.0)
+        if s0 is None or s1 is None or u is None:
+            return None
+        dx, dy = u[0] - s0[0], u[1] - s0[1]
+        length = math.hypot(dx, dy)
+        if length < 1e-3:
+            return None
+        end = s1
+        minimum = h.get('min_px', 34)
+        if math.hypot(s1[0] - s0[0], s1[1] - s0[1]) < minimum:
+            end = (s0[0] + dx / length * minimum, s0[1] + dy / length * minimum)
+        return dict(start=s0, end=end, ux=dx / length, uy=dy / length, px_per_mm=length / 10.0)
 
     def _grab_handle(self, x, y):
         best = None
         for h in self.handles:
-            try:
-                s0, s1, length = self._screen_dir(h['tip'], h['dir'])
-            except Exception:
+            geo = self.handle_geometry(h)
+            if geo is None:
                 continue
-            dist = float(np.hypot(x - s0[0], y - s0[1]))
-            if dist < 20 and (best is None or dist < best[0]):
-                best = (dist, h['id'], s0, s1, length)
+            dist = math.hypot(x - geo['end'][0], y - geo['end'][1])
+            if dist <= 16 and (best is None or dist < best[0]):
+                best = (dist, h['id'], geo)
         return best
 
     def pick_body(self, x, y):
@@ -488,24 +602,14 @@ class CadView(gl.GLViewWidget):
         self.opts['center'] = QVector3D(*[float(c) for c in frame.origin])
         self.setCameraPosition(elevation=math.degrees(math.asin(max(-1, min(1, n[2])))), azimuth=math.degrees(math.atan2(n[1], n[0])))
 
-    def set_marker(self, point, color=(0.1, .55, .45, 1)):
-        """Celownik kursora szkicu (zielony / pomarańczowy w trakcie rysowania)."""
-        for item in self.marker_items:
-            self.removeItem(item)
-        self.marker_items = []
-        if point is not None:
-            p = np.asarray(point, float)
-            r = float(self.opts['distance']) * .012
-            frame = kernel.frame_of(self.sketch_plane) if self.sketch_plane else kernel.STANDARD['XY']
-            x, y = np.array(frame.xdir), np.array(frame.ydir)
-            ang = np.linspace(0, 2 * np.pi, 25)
-            ring = np.array([p + r * .55 * (np.cos(a) * x + np.sin(a) * y) for a in ang], dtype=np.float32)
-            for pts in (ring, np.array([p - x * r, p + x * r], dtype=np.float32), np.array([p - y * r, p + y * r], dtype=np.float32)):
-                line = gl.GLLinePlotItem(pos=pts, color=color, width=1.6, antialias=True)
-                line.setDepthValue(20)
-                self.addItem(line)
-                self.marker_items.append(line)
-        self.update()
+    def set_marker(self, point, color=None, label=None):
+        """Znacznik przyciągania (pomarańczowe kółko z etykietą) - tylko gdy kursor złapał punkt, jak w wersji HTML."""
+        self.snap_marker = None
+        if point is not None and label:
+            xy = self.project_one(point)
+            if xy is not None:
+                self.snap_marker = (xy, label)
+        self.overlay.update()
 
     def camera_matrix(self):
         viewport = (0, 0, max(1,self.width()), max(1,self.height()))
@@ -594,12 +698,8 @@ class CadView(gl.GLViewWidget):
         pos = event.position()
         buttons = event.buttons()
         if self._handle_drag is not None:
-            hid, x0, y0, s0, s1, length = self._handle_drag
-            axis = np.asarray(s1) - np.asarray(s0)
-            norm2 = float(axis @ axis)
-            if norm2 > 1e-6:
-                moved = np.array([pos.x() - x0, pos.y() - y0])
-                self.handleDragged.emit(hid, float(moved @ axis) / norm2 * length)
+            hid, x0, y0, geo = self._handle_drag
+            self.handleDragged.emit(hid, ((pos.x() - x0) * geo['ux'] + (pos.y() - y0) * geo['uy']) / geo['px_per_mm'])
             event.accept()
             return
         if self._sk_start is not None and buttons & Qt.LeftButton:
@@ -644,7 +744,7 @@ class CadView(gl.GLViewWidget):
                 if self.sketch_plane and self.sketch_tool:
                     point = self.plane_point(self.sketch_plane, pos.x(), pos.y())
                     if point:
-                        u, v = self._snap(point)
+                        u, v = self._snap(point, pos=pos)
                         self.sketchMoved.emit(self.sketch_plane, u, v)
                 else:
                     self.viewHover.emit(pos.x(), pos.y())
@@ -671,7 +771,7 @@ class CadView(gl.GLViewWidget):
         if self.handles and event.button() == Qt.LeftButton:
             grabbed = self._grab_handle(event.position().x(), event.position().y())
             if grabbed:
-                self._handle_drag = (grabbed[1], event.position().x(), event.position().y(), grabbed[2], grabbed[3], grabbed[4])
+                self._handle_drag = (grabbed[1], event.position().x(), event.position().y(), grabbed[2])
                 self._press = None
                 event.accept()
                 return

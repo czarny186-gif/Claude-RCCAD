@@ -34,6 +34,12 @@ class StudioTests(unittest.TestCase):
         self.app.processEvents()
         self.assertFalse(self.w.busy)
 
+    def preview(self):
+        end=time.monotonic()+20
+        while time.monotonic()<end and any(st['running'] or st['pending'] for st in self.w._pv.values()):
+            self.app.processEvents();time.sleep(.005)
+        self.app.processEvents()
+
     def sketch(self,tool,*points,plane='XY'):
         if self.w.mode!='sketch':self.w.set_mode('plane');self.w.plane_picked(plane)
         self.w.choose_tool(tool)
@@ -63,7 +69,7 @@ class StudioTests(unittest.TestCase):
             w.view_hover(5,5);w.view_clicked(5,5,False,False)
         self.assertEqual(w.mode,'sketch');self.assertNotIsInstance(w.sketch_plane,str)
         w.choose_tool('circle');w.sketch_clicked(w.sketch_plane,10,10);w.sketch_moved(w.sketch_plane,14,10)
-        self.assertTrue(w.view.preview_items);w.sketch_clicked(w.sketch_plane,14,10);self.wait()
+        self.preview();self.assertTrue(w.view.preview_items);w.sketch_clicked(w.sketch_plane,14,10);self.wait()
         sk=w.document.bodies[-1];self.assertEqual(sk.kind,'sketch');self.assertAlmostEqual(k.bounds(sk.shape).zmin,20,3)
 
     def test_all_supported_shapes_create_sketches(self):
@@ -79,7 +85,7 @@ class StudioTests(unittest.TestCase):
     def test_extrude_by_clicking_profile_with_preview(self):
         w=self.w;self.sketch('rect',(0,0),(20,10));w.set_mode('extrude');w.ex_value.setValue(15)
         self.pick_sketch_profile(w.document.bodies[0])
-        self.assertTrue(w.ex_bar.isVisible());self.assertTrue(w.view.preview_items);self.assertTrue(w.view.handles)
+        self.assertTrue(w.ex_bar.isVisible());self.preview();self.assertTrue(w.view.preview_items);self.assertTrue(w.view.handles)
         w.apply_extrude();self.wait()
         solids=[b for b in w.document.bodies if b.kind=='solid'];self.assertEqual(len(solids),1)
         self.assertAlmostEqual(solids[0].shape.Volume(),20*10*15,2);self.assertIsNone(w.mode)
@@ -113,7 +119,7 @@ class StudioTests(unittest.TestCase):
         for body in (a,b):
             with patch.object(w.view,'pick_body',return_value=body.id):w.view_clicked(5,5,False,False)
         self.assertEqual(w.bool_ids,[a.id,b.id]);self.assertIn(a.id,w.view.tints)
-        w.update_bool_preview();self.assertTrue(w.view.preview_items)
+        w.update_bool_preview();self.preview();self.assertTrue(w.view.preview_items)
         w.bool_op.setCurrentIndex(0);w.apply_bool();self.wait()
         self.assertEqual(len([x for x in w.document.bodies if x.kind=='solid']),1)
         self.assertGreater(w.document.bodies[0].shape.Volume(),8000)
@@ -123,7 +129,7 @@ class StudioTests(unittest.TestCase):
         with patch.object(w.view,'nearest_edge',return_value=(a.id,0)):w.view_clicked(5,5,False,False)
         self.assertEqual(w.edges,{a.id:{0}});self.assertTrue(w.view.handles)
         w.handle_dragged('mod',2.0);self.assertGreater(w.mod_size.value(),3.0);w.handle_released('mod')
-        w.mod_size.setValue(2);w.update_mod_preview();self.assertTrue(w.view.preview_items)
+        w.mod_size.setValue(2);w.update_mod_preview();self.preview();self.assertTrue(w.view.preview_items)
         w.apply_mod();self.wait();self.assertLess(w.document.bodies[0].shape.Volume(),8000)
 
     def test_chamfer(self):
@@ -134,15 +140,15 @@ class StudioTests(unittest.TestCase):
         w=self.w;a=Body('A',k.hole(k.box(20,20,20),3,5,5)).prepared();w.document.commit([a]);w.refresh();w.set_mode('mirror')
         with patch.object(w.view,'pick_body',return_value=a.id):w.view_clicked(5,5,False,False)
         with patch.object(w.view,'pick_face',return_value=(a.id,[1,0,0],[20,10,10])):w.view_clicked(5,5,False,False)
-        self.assertIsNotNone(w.mirror_frame);w.update_mirror_preview();self.assertTrue(w.view.preview_items)
+        self.assertIsNotNone(w.mirror_frame);w.update_mirror_preview();self.preview();self.assertTrue(w.view.preview_items)
         w.apply_mirror();self.wait();self.assertEqual(len(w.document.bodies),2)
 
     def test_move_and_rotate_selected_solid_live(self):
         w=self.w;a,b=self.make_solids();w.selected=[a.id];w.set_mode('move');self.assertIs(w.t_target.id,a.id)
-        w.t_spins[0].setValue(7);w.update_transform_preview();self.assertAlmostEqual(w.override[a.id].shape.Center().x,10+7,2)
+        w.t_spins[0].setValue(7);w.update_transform_preview();self.preview();self.assertAlmostEqual(w.override[a.id].shape.Center().x,10+7,2)
         w.handle_dragged('x',3.0);w.handle_released('x');w.apply_transform();self.wait()
         self.assertAlmostEqual(w.document.get(a.id).shape.Center().x,10+10,2)
-        w.selected=[a.id];w.set_mode('rotate');w.t_spins[2].setValue(90);w.update_transform_preview();self.assertTrue(w.override)
+        w.selected=[a.id];w.set_mode('rotate');w.t_spins[2].setValue(90);w.update_transform_preview();self.preview();self.assertTrue(w.override)
         w.apply_transform();self.wait()
 
     def test_move_selected_sketch(self):
@@ -193,8 +199,21 @@ class StudioTests(unittest.TestCase):
     def test_typed_dimensions_are_live(self):
         w=self.w;w.set_mode('plane');w.plane_picked('XY');w.choose_tool('rect');w.sketch_clicked('XY',0,0)
         self.assertTrue(w.open_dim_input('3'));w.dim_edits[0].setText('30');w.dim_edits[1].setText('10')
-        w.update_dim_preview();self.assertTrue(w.view.preview_items);w.apply_typed();self.wait()
+        w.update_dim_preview();self.preview();self.assertTrue(w.view.preview_items);w.apply_typed();self.wait()
         b=k.bounds(w.document.bodies[0].shape);self.assertAlmostEqual(b.xlen,30,3);self.assertAlmostEqual(b.ylen,10,3)
+
+    def test_handles_are_drawn_on_top_overlay_and_draggable(self):
+        w=self.w;self.sketch('rect',(0,0),(10,10));w.set_mode('extrude');self.pick_sketch_profile(w.document.bodies[0])
+        self.assertTrue(w.view.handles);geo=w.view.handle_geometry(w.view.handles[0]);self.assertIsNotNone(geo)
+        grabbed=w.view._grab_handle(*geo['end']);self.assertEqual(grabbed[1],'ex')
+        w.view.overlay.repaint();self.app.processEvents()
+
+    def test_snap_to_existing_sketch_corner(self):
+        w=self.w;self.sketch('rect',(0,0),(10,10));w.choose_tool('line')
+        x,y=w.view.project_one(k.to_world('XY',10,10))
+        u,v,label=w._snapper(x+3,y+2,(10.4,10.3));self.assertEqual(label,'Punkt styku');self.assertAlmostEqual(u,10,3);self.assertAlmostEqual(v,10,3)
+        u,v,label=w._snapper(x+60,y+60,(14.3,3.9));self.assertEqual(label,None if label is None else 'Siatka')
+        w.view.set_marker(k.to_world('XY',10,10),label='Punkt styku');self.assertIsNotNone(w.view.snap_marker)
 
     def test_svg_import(self):
         import tempfile

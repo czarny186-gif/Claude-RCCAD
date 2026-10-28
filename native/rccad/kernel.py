@@ -413,7 +413,7 @@ def display_mesh(shape, tolerance=.12):
         length = edge.Length()
         if length < 1e-6:
             continue
-        count = 2 if edge.geomType() == "LINE" else min(256, max(24, int(length / .5)))
+        count = 2 if edge.geomType() == "LINE" else min(96, max(16, int(length / 1.0)))
         points = edge.positions(np.linspace(0, 1, count))
         edges[i] = np.asarray([p.toTuple() for p in points], dtype=np.float32)
     box_bounds = bounds(shape)

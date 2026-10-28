@@ -1,6 +1,7 @@
 """Okno „Studio”: układ, grafika i sposób modelowania / szkicowania odtworzone z wersji HTML (natywnie, bez przeglądarki)."""
 from __future__ import annotations
 import math
+from dataclasses import replace
 from pathlib import Path
 import numpy as np
 from PySide6.QtCore import QEvent, QObject, QPoint, QRunnable, QSize, Qt, QThreadPool, QTimer, Signal
@@ -9,6 +10,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog
                                QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QToolButton, QVBoxLayout, QWidget)
 from . import kernel
 from . import shell_ui as ui
+from . import snap as snapping
 from .document import Body, Document
 from .viewport import CadView
 
@@ -42,7 +44,8 @@ AXES = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
 AXIS_COLORS = ((.89, .31, .33, 1), (.14, .64, .42, 1), (.2, .5, .9, 1))
 TINT_BASE = (.30, .55, .95, 1)
 TINT_TOOL = (.95, .55, .20, 1)
-PREVIEW_BLUE = (.35, .65, .94, .78)
+PREVIEW_BLUE = (.30, .62, .91, .73)
+PREVIEW_TOL = .3
 SKETCH_ORANGE = (.95, .55, .1, 1)
 
 
@@ -142,6 +145,8 @@ class StudioWindow(QMainWindow):
         self._work = None
         self._popup = None
         self._planes_visible = True
+        self._pv = {}
+        self._snap_cache = None
         self.resize(1400, 850)
         self.setStyleSheet(ui.style())
         self.view = CadView(self)
@@ -161,7 +166,7 @@ class StudioWindow(QMainWindow):
                            ('mirror', self.update_mirror_preview), ('transform', self.update_transform_preview), ('dim', self.update_dim_preview)):
             timer = QTimer(self)
             timer.setSingleShot(True)
-            timer.setInterval(70)
+            timer.setInterval(40)
             timer.timeout.connect(slot)
             self._timers[name] = timer
         for seq, fn in (('Ctrl+Z', self.undo), ('Ctrl+Y', self.redo), ('Ctrl+Shift+Z', self.redo), ('Ctrl+S', self.save_project),
@@ -643,6 +648,8 @@ class StudioWindow(QMainWindow):
         if self.busy:
             return
         self.override = {}
+        self.cancel_previews()
+        self.view.snapper = None
         self.mode = mode
         self.points = []
         self.tangent_lines = []
@@ -767,6 +774,7 @@ class StudioWindow(QMainWindow):
         self.sketch_plane = plane
         self.view.plane_pick = False
         self.view.sketch_plane = plane
+        self.view.snapper = self._snapper
         self.view.show_planes(False)
         self.view.set_preview_mesh(None)
         self.view.look_along(plane)
@@ -779,6 +787,13 @@ class StudioWindow(QMainWindow):
 
     def plane_picked(self, name):
         self.enter_sketch(name)
+
+    def _snapper(self, x, y, raw):
+        key = (self.sketch_plane if isinstance(self.sketch_plane, str) else id(self.sketch_plane),
+               tuple((b.id, id(b.mesh)) for b in self.document.bodies if b.kind == 'sketch'))
+        if self._snap_cache is None or self._snap_cache[0] != key:
+            self._snap_cache = (key, snapping.SketchGeometry(self.document.bodies, self.sketch_plane))
+        return snapping.snap(self.view, self.sketch_plane, self._snap_cache[1], x, y, raw)
 
     def _wire(self, points):
         t = self.tool
@@ -821,7 +836,7 @@ class StudioWindow(QMainWindow):
             return
         self.last_uv = (u, v)
         drawing = bool(self.points) or (self.tool == 'circleTangent2' and bool(self.tangent_lines))
-        self.view.set_marker(kernel.to_world(self.sketch_plane, u, v), SKETCH_ORANGE if drawing else (.1, .55, .45, 1))
+        self.view.set_marker(kernel.to_world(self.sketch_plane, u, v), label=self.view.snap_label)
         if self.tool == 'circleTangent2':
             if len(self.tangent_lines) == 2:
                 try:
@@ -1037,7 +1052,7 @@ class StudioWindow(QMainWindow):
         if end is None:
             return
         self._show_sketch_preview([*self.points, end])
-        self.view.set_marker(kernel.to_world(self.sketch_plane, *end), SKETCH_ORANGE)
+        self.view.set_marker(kernel.to_world(self.sketch_plane, *end), label='Wymiar')
 
     def apply_typed(self):
         end = self.typed_end()
@@ -1197,12 +1212,16 @@ class StudioWindow(QMainWindow):
             self.view.set_handles([])
             return
         src = self.ex_profiles[0]
-        n = src['normal']
+        n = np.array(src['normal'], float)
+        c = np.array(src['center'], float)
         d = self.ex_value.value()
-        sym = self.ex_dir.currentData() == 'symmetric'
-        tip = [src['center'][i] + n[i] * (d / 2 if sym else d) for i in range(3)]
-        self.view.set_handles([dict(id='ex', tip=tip, dir=n if d >= 0 else tuple(-c for c in n))])
-
+        mode = self.ex_dir.currentData()
+        sign = 1.0 if d >= 0 else -1.0
+        handles = [dict(id='ex', start=c, tip=c + n * (d / 2 if mode == 'symmetric' else d), dir=n * sign, color=(.94, .6, .13, 1), label='+')]
+        if mode == 'two':
+            d2 = self.ex_second.value()
+            handles.append(dict(id='ex2', start=c, tip=c - n * d2, dir=-n, color=(.11, .51, .81, 1), label='−'))
+        self.view.set_handles(handles)
     def _make_tools(self):
         """Funkcje budujące bryły-narzędzia (po jednej na profil); bezpieczne dla wątku roboczego."""
         if not self.ex_profiles:
@@ -1223,19 +1242,27 @@ class StudioWindow(QMainWindow):
     def update_extrude_preview(self):
         if self.mode != 'extrude' or not self.ex_profiles:
             return
-        try:
-            meshes = [kernel.display_mesh(make()) for make in self._make_tools()]
-        except Exception as exc:
-            self.view.set_preview_mesh(None)
-            self.ex_status.setText(str(exc))
-            return
+        makers = self._make_tools()
         op = self.ex_op.currentData()
-        color = {'cut': (.95, .55, .2, .72), 'intersect': (.3, .75, .5, .72)}.get(op, PREVIEW_BLUE)
-        self.view.set_preview_mesh(_merge_meshes(meshes), color=color, line_color=(.1, .27, .5, 1), width=2)
-        self.ex_status.setText(f'Wybrano profili: {len(self.ex_profiles)}.')
+
+        def compute():
+            return _merge_meshes([kernel.display_mesh(make(), PREVIEW_TOL) for make in makers])
+
+        def show(mesh, error):
+            if self.mode != 'extrude' or not self.ex_profiles:
+                return
+            if error:
+                self.view.set_preview_mesh(None)
+                self.ex_status.setText(error)
+                return
+            red = op == 'cut'
+            color = (.9, .2, .2, .7) if red else ((.3, .75, .5, .72) if op == 'intersect' else PREVIEW_BLUE)
+            self.view.set_preview_mesh(mesh, color=color, line_color=(.56, .07, .07, 1) if red else (.14, .3, .45, 1), width=2)
+            self.ex_status.setText(f'Wybrano profili: {len(self.ex_profiles)}.')
+
+        self.run_preview('extrude', compute, show)
         if self._hv is None:
             self._place_extrude_handle()
-
     def apply_extrude(self):
         if self.busy or not self.ex_profiles:
             return
@@ -1308,17 +1335,26 @@ class StudioWindow(QMainWindow):
         if self.mode != 'bool':
             return
         if len(self.bool_ids) < 2:
+            self.cancel_previews()
             self.view.set_preview_mesh(None)
             return
         base, *tools = [self.document.get(i) for i in self.bool_ids]
-        if len(base.shape.Faces()) + sum(len(t.shape.Faces()) for t in tools) > 400:
-            return
-        try:
-            result = kernel.boolean(self.bool_op.currentData(), base.shape, [t.shape for t in tools])
-            self.view.set_preview_mesh(kernel.display_mesh(result), color=(.3, .8, .5, .55), line_color=(.05, .4, .2, 1), width=2)
-        except Exception:
-            self.view.set_preview_mesh(None)
+        op = self.bool_op.currentData()
+        ids = tuple(self.bool_ids)
 
+        def compute():
+            return kernel.display_mesh(kernel.boolean(op, base.shape, [t.shape for t in tools]), PREVIEW_TOL)
+
+        def show(mesh, error):
+            if self.mode != 'bool' or tuple(self.bool_ids) != ids:
+                return
+            if error:
+                self.view.set_preview_mesh(None)
+                self.bool_status.setText(self.bool_status.text().split('\n\n')[0] + '\n\n' + error)
+                return
+            self.view.set_preview_mesh(mesh, color=(.3, .8, .5, .55), line_color=(.05, .4, .2, 1), width=2)
+
+        self.run_preview('bool', compute, show)
     def apply_bool(self):
         if self.busy:
             return
@@ -1393,30 +1429,38 @@ class StudioWindow(QMainWindow):
         except Exception:
             self.view.set_handles([])
             return
-        size = self.mod_size.value()
-        tip = [mid[i] + direction[i] * size for i in range(3)]
-        self.view.set_handles([dict(id='mod', tip=tip, dir=direction, color=(.2, .75, .45, 1))])
-
+        mid, d = np.array(mid, float), np.array(direction, float)
+        self.view.set_handles([dict(id='mod', start=mid, tip=mid + d * self.mod_size.value(), dir=d, color=(.94, .6, .13, 1))])
     def update_mod_preview(self):
         if self.mode != 'mod':
             return
         if len(self.edges) != 1 or not next(iter(self.edges.values()), None):
+            self.cancel_previews()
             self.view.set_preview_mesh(None)
             return
         bid, ids = next(iter(self.edges.items()))
         body = self.document.get(bid)
-        if body is None or len(body.shape.Faces()) > 400:
+        if body is None:
             return
-        try:
-            result = kernel.blend(body.shape, set(ids), self.mod_size.value(), self.mod_kind.currentData())
-            adds = result.Volume() > body.shape.Volume() + 1e-6
-            color = (.25, .8, .45, .6) if adds else (.95, .55, .2, .6)
-            self.view.set_preview_mesh(kernel.display_mesh(result), color=color, line_color=(.1, .4, .2, 1) if adds else (.55, .3, .05, 1), width=2)
-            self.mod_status.setText(f'Zaznaczone krawędzie: {len(ids)}\n' + ('Zielony podgląd: dodaje materiał.' if adds else 'Pomarańczowy podgląd: usuwa materiał.'))
-        except Exception:
-            self.view.set_preview_mesh(None)
-            self.mod_status.setText(f'Zaznaczone krawędzie: {len(ids)}\nTa wartość jest za duża dla wybranych krawędzi.')
+        size, kind, ids = self.mod_size.value(), self.mod_kind.currentData(), set(ids)
 
+        def compute():
+            result = kernel.blend(body.shape, ids, size, kind)
+            return kernel.display_mesh(result, PREVIEW_TOL), result.Volume() > body.shape.Volume() + 1e-6
+
+        def show(value, error):
+            if self.mode != 'mod' or self.edges.get(bid) != ids:
+                return
+            if error or value is None:
+                self.view.set_preview_mesh(None)
+                self.mod_status.setText(f'Zaznaczone krawędzie: {len(ids)}\nTa wartość jest za duża dla wybranych krawędzi.')
+                return
+            mesh, adds = value
+            self.view.set_preview_mesh(mesh, color=(.25, .8, .45, .6) if adds else (.95, .55, .2, .6),
+                                       line_color=(.1, .4, .2, 1) if adds else (.55, .3, .05, 1), width=2)
+            self.mod_status.setText(f'Zaznaczone krawędzie: {len(ids)}\n' + ('Zielony podgląd: dodaje materiał.' if adds else 'Pomarańczowy podgląd: usuwa materiał.'))
+
+        self.run_preview('mod', compute, show)
     def apply_mod(self):
         if self.busy:
             return
@@ -1487,15 +1531,20 @@ class StudioWindow(QMainWindow):
         if self.mode != 'mirror':
             return
         if self.mirror_id is None or self.mirror_frame is None:
+            self.cancel_previews()
             self.view.set_preview_mesh(None)
             return
-        try:
-            body = self.document.get(self.mirror_id)
-            shape = kernel.mirror_plane(body.shape, *self.mirror_frame)
-            self.view.set_preview_mesh(kernel.display_mesh(shape), color=(.3, .8, .5, .55), line_color=(.05, .4, .2, 1), width=2)
-        except Exception:
-            self.view.set_preview_mesh(None)
+        body = self.document.get(self.mirror_id)
+        frame = self.mirror_frame
 
+        def compute():
+            return kernel.display_mesh(kernel.mirror_plane(body.shape, *frame), PREVIEW_TOL)
+
+        def show(mesh, error):
+            if self.mode == 'mirror' and self.mirror_frame == frame:
+                self.view.set_preview_mesh(None if error else mesh, color=(.3, .8, .5, .55), line_color=(.05, .4, .2, 1), width=2)
+
+        self.run_preview('mirror', compute, show)
     def apply_mirror(self):
         if self.busy:
             return
@@ -1558,14 +1607,15 @@ class StudioWindow(QMainWindow):
         handles = []
         for i, axis in enumerate(AXES):
             a = np.array(axis)
+            letter = 'XYZ'[i]
             if self.mode == 'move':
-                handles.append(dict(id='xyz'[i], tip=c + move + a * r, dir=a, color=AXIS_COLORS[i]))
+                handles.append(dict(id='xyz'[i], start=c + move, tip=c + move + a * r, dir=a, color=AXIS_COLORS[i], label=letter))
             else:
                 e1 = np.cross(a, (0, 0, 1.0) if abs(a[2]) < .9 else (1.0, 0, 0))
                 e1 /= np.linalg.norm(e1)
-                handles.append(dict(id='xyz'[i], tip=c + e1 * r, dir=np.cross(a, e1), color=AXIS_COLORS[i], ring=(c, a, r)))
+                tip = c + e1 * r
+                handles.append(dict(id='xyz'[i], start=tip, tip=tip, dir=np.cross(a, e1), color=AXIS_COLORS[i], label=letter, ring=(c, a, r), min_px=0))
         self.view.set_handles(handles)
-
     def _transform_changed(self):
         self._timers['transform'].start()
         if self._hv is None:
@@ -1576,6 +1626,10 @@ class StudioWindow(QMainWindow):
             if self._hv is None:
                 self._hv = self.ex_value.value()
             self.ex_value.setValue(round(self._hv + delta, 1))
+        elif hid == 'ex2':
+            if self._hv is None:
+                self._hv = self.ex_second.value()
+            self.ex_second.setValue(max(0.0, round(self._hv + delta, 1)))
         elif hid == 'mod':
             if self._hv is None:
                 self._hv = self.mod_size.value()
@@ -1589,7 +1643,7 @@ class StudioWindow(QMainWindow):
 
     def handle_released(self, hid):
         self._hv = None
-        if hid == 'ex':
+        if hid in ('ex', 'ex2'):
             self._place_extrude_handle()
         elif hid == 'mod':
             self._place_mod_handle()
@@ -1600,13 +1654,19 @@ class StudioWindow(QMainWindow):
         if self.mode not in ('move', 'rotate') or self.t_target is None:
             return
         v = tuple(s.value() for s in self.t_spins)
-        try:
-            shape = kernel.transform(self.t_target.shape, v, (0, 0, 0)) if self.mode == 'move' else kernel.transform(self.t_target.shape, (0, 0, 0), v)
-            self.override = {self.t_target.id: self.t_target.changed(shape)}
-        except kernel.CadError:
-            return
-        self.refresh()
+        target, mode = self.t_target, self.mode
 
+        def compute():
+            shape = kernel.transform(target.shape, v, (0, 0, 0)) if mode == 'move' else kernel.transform(target.shape, (0, 0, 0), v)
+            return replace(target, shape=shape, mesh=kernel.display_mesh(shape, PREVIEW_TOL))
+
+        def show(body, error):
+            if error or self.mode != mode or self.t_target is not target:
+                return
+            self.override = {target.id: body}
+            self.refresh()
+
+        self.run_preview('transform', compute, show)
     def apply_transform(self):
         if self.busy or self.t_target is None:
             self.toast('Kliknij obiekt, aby go zaznaczyć.')
@@ -1673,6 +1733,44 @@ class StudioWindow(QMainWindow):
         work.signals.done.connect(done)
         work.signals.failed.connect(failed)
         self.pool.start(work)
+
+    # ---------- podglądy liczone w tle (GUI nigdy nie czeka na OpenCascade) ----------
+    def run_preview(self, key, compute, show):
+        """Ostatnie żądanie wygrywa: przy szybkim przeciąganiu pośrednie wyniki są pomijane, a interfejs nie zamarza."""
+        st = self._pv.setdefault(key, dict(running=False, pending=None, gen=0))
+        st['gen'] += 1
+        st['pending'] = (st['gen'], compute, show)
+        if not st['running']:
+            self._pv_next(key)
+
+    def _pv_next(self, key):
+        st = self._pv[key]
+        if st['pending'] is None:
+            st['running'] = False
+            return
+        gen, compute, show = st['pending']
+        st['pending'] = None
+        st['running'] = True
+        work = _Work(compute)
+        st['work'] = work
+        work.signals.done.connect(lambda value, g=gen: self._pv_done(key, g, show, value, None))
+        work.signals.failed.connect(lambda message, g=gen: self._pv_done(key, g, show, None, message))
+        self.pool.start(work)
+
+    def _pv_done(self, key, gen, show, value, error):
+        st = self._pv[key]
+        st['running'] = False
+        if st['gen'] == gen:
+            try:
+                show(value, error)
+            except Exception:
+                pass
+        self._pv_next(key)
+
+    def cancel_previews(self):
+        for st in self._pv.values():
+            st['gen'] += 1
+            st['pending'] = None
 
     def add_prepared(self, body):
         self.document.commit((*self.document.bodies, body))
