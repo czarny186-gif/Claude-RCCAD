@@ -283,6 +283,7 @@ class StudioWindow(QMainWindow):
         self.cube_buttons = {}
         self.cube.faceClicked.connect(self._cube_clicked)
         self.cube.directionClicked.connect(lambda az, el: (self.view.setCameraPosition(azimuth=az, elevation=el), self.view.update()))
+        self.cube.rotateClicked.connect(self._cube_rotate)
         self.view.cameraMoved.connect(self.cube.update)
         self.view.cameraMoved.connect(self._camera_changed)
 
@@ -507,7 +508,7 @@ class StudioWindow(QMainWindow):
         for w in (self.ex_value, self.ex_second):
             w.valueChanged.connect(lambda *_: self._ex_value_changed())
         self.ex_dir.currentIndexChanged.connect(self._ex_dir_changed)
-        self.ex_op.currentIndexChanged.connect(lambda *_: self._timers['extrude'].start())
+        self.ex_op.currentIndexChanged.connect(lambda *_: (self._ex_op_user_changed(), self._timers['extrude'].start()))
         self.ex_second_label.hide()
         self.ex_second.hide()
 
@@ -1328,6 +1329,9 @@ class StudioWindow(QMainWindow):
         else:
             self.ex_profiles = [src]
         self._hover_key = None
+        if not shift:
+            self._ex_op_manual = False
+        self._auto_extrude_op()
         if not self.ex_profiles:
             self.view.set_selection_meshes(None)
             self.ex_bar.hide()
@@ -1359,7 +1363,53 @@ class StudioWindow(QMainWindow):
         self.ex_bar.adjustSize()
         self._timers['extrude'].start()
 
+    def _cube_rotate(self, daz, delev):
+        """Strzałki kostki: obrót widoku o 90° (przerzucenie kostki na niewidoczną ścianę)."""
+        az = float(self.view.opts['azimuth'])
+        el = float(self.view.opts['elevation'])
+        if daz:
+            az = round(az / 90.0) * 90.0 + daz
+        if delev:
+            el = max(-90.0, min(90.0, round(el / 90.0) * 90.0 + delev))
+        self.view.setCameraPosition(azimuth=az, elevation=el)
+        self.view.update()
+
+    def _auto_extrude_op(self):
+        """Wciąganie w bryłę = wycinanie, na zewnątrz = połączenie (dopóki użytkownik sam nie wybrał operacji)."""
+        if getattr(self, '_ex_op_manual', False) or len(self.ex_profiles) != 1 or self.ex_dir.currentData() != 'one':
+            return
+        src = self.ex_profiles[0]
+        value = self.ex_value.value()
+        if abs(value) < 1e-6:
+            return
+        n = np.array(src['normal'], float)
+        c = np.array(src['center'], float)
+        solids = [b for b in self.document.bodies if b.kind == 'solid']
+        touching = src.get('kind') == 'face'
+        sample = c + n * (.05 if value > 0 else -.05)
+        inside = False
+        try:
+            if not touching:
+                touching = any(kernel.point_state(b.shape, c) != 'out' for b in solids)
+            inside = touching and any(kernel.point_state(b.shape, sample) == 'in' for b in solids)
+        except Exception:
+            return
+        if not touching:
+            return
+        want = 'cut' if inside else 'join'
+        if self.ex_op.currentData() != want:
+            self._ex_auto = True
+            try:
+                self.ex_op.setCurrentIndex(self.ex_op._data.index(want))
+            finally:
+                self._ex_auto = False
+
+    def _ex_op_user_changed(self):
+        if not getattr(self, '_ex_auto', False):
+            self._ex_op_manual = True
+
     def _ex_value_changed(self):
+        self._auto_extrude_op()
         self._timers['extrude'].start()
         if self._hv is None:
             self._place_extrude_handle()

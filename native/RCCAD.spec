@@ -19,5 +19,5 @@ a = Analysis([str(root/'main.py')], pathex=[str(root)], binaries=binaries, datas
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name='RCCAD Desktop',
     debug=False, bootloader_ignore_signals=False, strip=False, upx=False,
-    console=False, disable_windowed_traceback=False)
+    console=False, disable_windowed_traceback=False, icon=str(root/'rccad'/'assets'/'rccad.ico'))
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name='RCCAD Desktop')

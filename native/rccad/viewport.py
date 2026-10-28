@@ -1008,7 +1008,7 @@ class CadView(gl.GLViewWidget):
                 j = int(np.nanargmin(dist))
                 if dist[j] < distance:
                     world = points[j] + (points[j + 1] - points[j]) * t[j]
-                    if self._visible_point(world):
+                    if self.xray or self._visible_point(world):
                         distance, best = float(dist[j]), (body.id, index)
         return best
 

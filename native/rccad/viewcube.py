@@ -27,13 +27,14 @@ QUADS = {
 class ViewCube(QWidget):
     faceClicked = Signal(str)
     directionClicked = Signal(float, float)   # azymut, elewacja (stopnie)
+    rotateClicked = Signal(float, float)      # zmiana azymutu, zmiana elewacji (stopnie)
 
     def __init__(self, view, parent=None):
         super().__init__(parent)
         self.view = view
         self.setFixedSize(138, 138)
         self.setMouseTracking(True)
-        self.hover = None          # ('face', nazwa) | ('corner', wektor) | ('edge', wektor)
+        self.hover = None          # ('face', nazwa) | ('corner', wektor) | ('edge', wektor) | ('arrow', nazwa)
         self.setCursor(Qt.PointingHandCursor)
 
     # ---- rzut: ortograficzny, zgodny z kamerą widoku 3D ----
@@ -46,7 +47,7 @@ class ViewCube(QWidget):
 
     def _project(self, p):
         c, r, u = self._basis()
-        scale = 31.0
+        scale = 25.0
         p = np.asarray(p, float)
         return QPointF(self.width() / 2 + float(p @ r) * scale, self.height() / 2 - float(p @ u) * scale), float(p @ c)
 
@@ -59,9 +60,19 @@ class ViewCube(QWidget):
                 out.append((depth, name))
         return sorted(out)
 
+    ARROWS = {'up': (0, -1, 0, 90.0), 'down': (0, 1, 0, -90.0), 'left': (-1, 0, -90.0, 0), 'right': (1, 0, 90.0, 0)}
+
+    def _arrow_center(self, name):
+        dx, dy = self.ARROWS[name][:2]
+        return QPointF(self.width() / 2 + dx * (self.width() / 2 - 11), self.height() / 2 + dy * (self.height() / 2 - 11))
+
     def _hit(self, pos):
         c, _, _ = self._basis()
         best = None
+        for name in self.ARROWS:
+            ctr = self._arrow_center(name)
+            if math.hypot(ctr.x() - pos.x(), ctr.y() - pos.y()) <= 11:
+                return ('arrow', name)
         for sx, sy, sz in itertools.product((-1, 1), repeat=3):
             v = np.array([sx, sy, sz])
             pt, depth = self._project(v)
@@ -109,6 +120,15 @@ class ViewCube(QWidget):
                 p.setPen(QColor('#e5262b' if False else '#3f607f'))
                 p.drawText(QRectF(0, 0, w, h), Qt.AlignCenter, FACES[name][1])
                 p.restore()
+        for name, (dx, dy, _, _) in self.ARROWS.items():
+            ctr = self._arrow_center(name)
+            hot = self.hover == ('arrow', name)
+            p.setPen(QPen(QColor('#ffffff'), 1.6))
+            p.setBrush(QColor('#2f87e8') if hot else QColor('#8fb0d0'))
+            tri = QPolygonF([QPointF(ctr.x() + dx * 7, ctr.y() + dy * 7),
+                             QPointF(ctr.x() - dx * 5 - dy * 7, ctr.y() - dy * 5 + dx * 7),
+                             QPointF(ctr.x() - dx * 5 + dy * 7, ctr.y() - dy * 5 - dx * 7)])
+            p.drawPolygon(tri)
         if self.hover and self.hover[0] in ('corner', 'edge'):
             pt, _ = self._project(self.hover[1] if self.hover[0] == 'corner' else self.hover[1] * 1.2)
             p.setBrush(QColor('#2f87e8'))
@@ -131,8 +151,8 @@ class ViewCube(QWidget):
 
     def mouseMoveEvent(self, event):
         hit = self._hit(event.position())
-        key = None if hit is None else (hit[0], hit[1] if hit[0] == 'face' else tuple(np.round(hit[1], 3)))
-        old = None if self.hover is None else (self.hover[0], self.hover[1] if self.hover[0] == 'face' else tuple(np.round(self.hover[1], 3)))
+        key = None if hit is None else (hit[0], hit[1] if hit[0] in ('face', 'arrow') else tuple(np.round(hit[1], 3)))
+        old = None if self.hover is None else (self.hover[0], self.hover[1] if self.hover[0] in ('face', 'arrow') else tuple(np.round(self.hover[1], 3)))
         if key != old:
             self.hover = hit
             self.update()
@@ -147,7 +167,9 @@ class ViewCube(QWidget):
         hit = self._hit(event.position())
         if hit is None:
             return
-        if hit[0] == 'face':
+        if hit[0] == 'arrow':
+            self.rotateClicked.emit(*self.ARROWS[hit[1]][2:])
+        elif hit[0] == 'face':
             self.faceClicked.emit(hit[1])
         else:
             d = np.asarray(hit[1], float)

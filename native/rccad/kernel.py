@@ -32,6 +32,15 @@ def valid(shape, solid=True):
     return shape
 
 
+def point_state(shape, point, tol=1e-4):
+    """'in' / 'on' / 'out' - położenie punktu względem bryły."""
+    from OCP.BRepClass3d import BRepClass3d_SolidClassifier
+    from OCP.TopAbs import TopAbs_IN, TopAbs_ON
+    from OCP.gp import gp_Pnt
+    state = BRepClass3d_SolidClassifier(shape.wrapped, gp_Pnt(*[float(c) for c in point]), tol).State()
+    return 'in' if state == TopAbs_IN else ('on' if state == TopAbs_ON else 'out')
+
+
 def bounds(shape):
     # Measurements must not depend on the display tessellation's deflection.
     box = Bnd_Box()

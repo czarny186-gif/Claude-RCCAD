@@ -244,6 +244,17 @@ class StudioTests(unittest.TestCase):
         w.view.stretch_preview((0,0,0),(0,0,1),1.5)
 
 
+    def test_cube_arrows_auto_cut_xray_pick_and_splash(self):
+        w=self.w;w.view.setCameraPosition(azimuth=-90,elevation=0);w._cube_rotate(90,0);self.assertAlmostEqual(w.view.opts['azimuth'],0,3)
+        w._cube_rotate(0,90);self.assertAlmostEqual(w.view.opts['elevation'],90,3)
+        hit=w.cube._hit(w.cube._arrow_center('left'));self.assertEqual(hit,('arrow','left'))
+        self.sketch('rect',(0,0),(10,10));w.set_mode('extrude');self.pick_sketch_profile(w.document.bodies[0])
+        w.ex_value.setValue(10);w.apply_extrude();self.wait()
+        solid=[b for b in w.document.bodies if b.kind=='solid'][0]
+        self.assertEqual(k.point_state(solid.shape,(5,5,5)),'in')
+        from rccad.splash import Splash
+        sp=Splash('');sp.show();sp.repaint();sp.close()
+
     def test_cube_button_picks_sketch_plane_and_grid_adapts(self):
         w=self.w;w.set_mode('plane');w._cube_clicked('X');self.assertEqual((w.mode,w.sketch_plane),('sketch','YZ'))
         w.view.opts['distance']=400;w.view.update();far=w.view._grid_key[0]

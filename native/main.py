@@ -30,22 +30,34 @@ def main():
         return 0
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication, QMessageBox
-    from PySide6.QtGui import QFont, QSurfaceFormat
+    from PySide6.QtGui import QFont, QIcon, QSurfaceFormat
     format=QSurfaceFormat();format.setDepthBufferSize(24);format.setSamples(4)
     QSurfaceFormat.setDefaultFormat(format)
     app=QApplication(sys.argv[:1]);app.setApplicationName('RCCAD Desktop');app.setOrganizationName('RCCAD');app.setFont(QFont('Segoe UI',10))
+    icon_path=Path(__file__).resolve().parent/'rccad'/'assets'/'rccad.png'
+    if icon_path.exists():app.setWindowIcon(QIcon(str(icon_path)))
+    splash=None
+    try:
+        from rccad.splash import Splash, run_with_splash
+        splash=Splash(str(icon_path));splash.show();app.processEvents()
+    except Exception:
+        run_with_splash=None
     def exception_hook(kind,value,tb):
         text=''.join(traceback.format_exception(kind,value,tb))
         try:(cache/'error.log').write_text(text,encoding='utf-8')
         except OSError:pass
         QMessageBox.critical(None,'RCCAD — błąd',f'Wystąpił błąd: {value}\n\nDotychczasowy zapis projektu nie został nadpisany.\nSzczegóły: {cache / "error.log"}')
     sys.excepthook=exception_hook
-    if args.classic:
-        from rccad.window import MainWindow
-        window=MainWindow()
-    else:
+    def build():
+        if args.classic:
+            from rccad.window import MainWindow
+            return MainWindow()
         from rccad.studio import StudioWindow
-        window=StudioWindow()
+        return StudioWindow()
+    if splash is not None:
+        window=run_with_splash(app,splash,build)
+    else:
+        window=build()
     if args.demo:
         from rccad import kernel as k
         from rccad.document import Body
@@ -54,6 +66,7 @@ def main():
         window.document.commit([Body('Przykład — otwór i zaokrąglenia',shape).prepared()])
         window.refresh(True)
     window.show()
+    if splash is not None:splash.close()
     return app.exec()
 
 
