@@ -397,7 +397,7 @@ class CadView(gl.GLViewWidget):
             cam = self.camera_dir()
         except Exception:
             return
-        for item, direction in self.axis_lines:
+        for item, direction in getattr(self, 'axis_lines', ()):
             item.setVisible(abs(float(np.dot(cam, direction))) < .985)
 
     def resizeEvent(self, event):
