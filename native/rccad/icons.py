@@ -105,6 +105,65 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
                 p.drawLine(QPointF(24, 32), QPointF(24, 8)); p.drawPolyline(QPolygonF([QPointF(15, 17), QPointF(24, 8), QPointF(33, 17)]))
             else:
                 p.drawLine(QPointF(24, 8), QPointF(24, 32)); p.drawPolyline(QPolygonF([QPointF(15, 23), QPointF(24, 32), QPointF(33, 23)]))
+    elif kind.startswith('t_'):
+        name = kind[2:]
+        white = name.endswith('_w')
+        name = name[:-2] if white else name
+        ink = '#ffffff' if white else '#324c68'
+        acc = '#ffb54d' if white else ORANGE
+        soft = (QColor(255, 255, 255, 46) if white else QColor('#dbe9f8'))
+        st = lambda c=ink, w=2.6: (p.setBrush(Qt.NoBrush), p.setPen(pen(c, w)))
+        fl = lambda path, c, edge=ink, w=2.6: (p.setBrush(c if isinstance(c, QColor) else QColor(c)), p.setPen(pen(edge, w)), p.drawPath(path))
+        poly = lambda pts: QPolygonF([QPointF(*q) for q in pts])
+        if name == 'file':
+            body = QPainterPath(); body.moveTo(8, 8); body.lineTo(34, 8); body.lineTo(41, 15); body.lineTo(41, 41); body.lineTo(8, 41); body.closeSubpath()
+            fl(body, soft)
+            fl(_rounded(14, 8, 17, 10, 1.5), QColor(acc), ink, 2.2)
+            fl(_rounded(13, 26, 22, 15, 2), QColor(0, 0, 0, 0), ink, 2.4)
+        elif name == 'sketch':
+            fl(_rounded(7, 18, 26, 22, 3), soft)
+            st(acc, 3.2); p.drawLine(QPointF(24, 30), QPointF(39, 12))
+            p.setBrush(QColor(acc)); p.setPen(Qt.NoPen); p.drawPolygon(poly([(20, 33), (22, 26), (28, 31)]))
+        elif name == 'extrude':
+            fl(_rounded(8, 28, 26, 14, 2), soft)
+            st(acc, 3.0); p.drawLine(QPointF(21, 24), QPointF(21, 6)); p.drawPolyline(poly([(14, 13), (21, 6), (28, 13)]))
+            st(ink, 2.0); pn = pen(ink, 2.0); pn.setStyle(Qt.DashLine); p.setPen(pn); p.drawRect(QRectF(8, 10, 0, 0))
+        elif name == 'bool':
+            a2, b2 = _rounded(6, 9, 25, 25, 4), _rounded(17, 15, 25, 25, 4)
+            fl(a2, soft); fl(b2, QColor(0, 0, 0, 0))
+            fl(a2.intersected(b2), QColor(acc), acc, 1.2)
+            st(ink, 2.6); p.drawPath(a2); p.drawPath(b2)
+        elif name == 'mod':
+            path = QPainterPath(); path.moveTo(8, 40); path.lineTo(8, 14); path.lineTo(24, 14); path.arcTo(QRectF(12, 14, 24, 24), 90, -90); path.lineTo(40, 40); path.closeSubpath()
+            path2 = QPainterPath(); path2.moveTo(8, 40); path2.lineTo(8, 10); path2.lineTo(24, 10); path2.arcTo(QRectF(8, 10, 32, 32), 90, -90); path2.lineTo(40, 40); path2.closeSubpath()
+            fl(path2, soft)
+            st(acc, 3.0); p.drawArc(QRectF(8, 10, 32, 32), 90 * 16, -90 * 16)
+        elif name == 'mirror':
+            fl(QPainterPath(), QColor(0, 0, 0, 0))
+            tri = QPainterPath(); tri.moveTo(21, 10); tri.lineTo(21, 40); tri.lineTo(5, 40); tri.closeSubpath()
+            tri2 = QPainterPath(); tri2.moveTo(27, 10); tri2.lineTo(27, 40); tri2.lineTo(43, 40); tri2.closeSubpath()
+            fl(tri, soft); fl(tri2, QColor(acc), acc, 2.0)
+            pn = pen(ink, 2.2); pn.setStyle(Qt.DashLine); p.setPen(pn); p.drawLine(QPointF(24, 5), QPointF(24, 44))
+        elif name in ('undo', 'redo'):
+            flip = name == 'redo'
+            m = (lambda x: 48 - x) if flip else (lambda x: x)
+            st(ink, 3.0)
+            p.drawPolyline(poly([(m(15), 11), (m(7), 19), (m(15), 27)]))
+            path = QPainterPath(); path.moveTo(m(8), 19); path.lineTo(m(28), 19); path.cubicTo(m(41), 19, m(41), 38, m(28), 38); path.lineTo(m(20), 38)
+            p.drawPath(path)
+        elif name == 'trash':
+            st(ink, 2.8); p.drawLine(QPointF(9, 13), QPointF(39, 13)); p.drawPolyline(poly([(19, 13), (19, 8), (29, 8), (29, 13)]))
+            body = QPainterPath(); body.moveTo(12, 13); body.lineTo(14, 41); body.lineTo(34, 41); body.lineTo(36, 13)
+            fl(body, soft)
+            st(acc, 2.6); p.drawLine(QPointF(20, 20), QPointF(20, 34)); p.drawLine(QPointF(28, 20), QPointF(28, 34))
+        elif name == 'home':
+            path = QPainterPath(); path.moveTo(7, 24); path.lineTo(24, 8); path.lineTo(41, 24); path.lineTo(36, 24); path.lineTo(36, 40); path.lineTo(12, 40); path.lineTo(12, 24); path.closeSubpath()
+            fl(path, soft)
+            fl(_rounded(20, 28, 8, 12, 1.5), QColor(acc), acc, 1.2)
+        elif name == 'layers':
+            for k, y in enumerate((30, 20, 10)):
+                q = poly([(24, y + 8), (42, y), (24, y - 8 + 0), (6, y)])
+                p.setBrush(soft if k else QColor(acc)); p.setPen(pen(ink if k else acc, 2.4)); p.drawPolygon(poly([(24, y + 9), (42, y), (24, y - 9), (6, y)]))
     elif kind == 'f_help':
         fill(_rounded(7, 9, 34, 30, 3), '#ffffff', BLUE)
         p.setPen(pen(BLUE, 2.2)); p.drawLine(QPointF(24, 9), QPointF(24, 39))

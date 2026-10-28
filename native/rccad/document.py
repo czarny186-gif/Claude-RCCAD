@@ -21,12 +21,13 @@ class Body:
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
     visible: bool = True
     mesh: DisplayMesh | None = field(default=None, compare=False, repr=False)
+    meta: dict | None = field(default=None, compare=False, repr=False)   # parametry szkicu (narzędzie, punkty, liczba boków) do edycji wymiarów
 
     def prepared(self):
         return replace(self, mesh=display_mesh(self.shape))
 
     def changed(self, shape):
-        return replace(self, shape=shape, mesh=display_mesh(shape))
+        return replace(self, shape=shape, mesh=display_mesh(shape), meta=None)
 
 
 class Document:
@@ -89,6 +90,8 @@ class Document:
                     member = f"bodies/{body.id}.brep"
                     archive.write(source, member)
                     entry = dict(id=body.id, name=body.name, kind=body.kind, plane=body.plane, visible=body.visible, file=member)
+                    if body.meta:
+                        entry['meta'] = body.meta
                     if isinstance(body.plane, Frame):
                         entry['plane'] = 'CUSTOM'
                         entry['frame'] = body.plane.to_dict()
@@ -130,7 +133,9 @@ class Document:
                     source.write_bytes(archive.read(item['file']))
                     shape = cq.importers.importBrep(str(source)).val()
                     valid(shape, kind == 'solid')
-                    bodies.append(Body(str(item['name']), shape, kind, plane, identifier, bool(item.get('visible', True))).prepared())
+                    meta = item.get('meta')
+                    bodies.append(Body(str(item['name']), shape, kind, plane, identifier, bool(item.get('visible', True)),
+                                       meta=meta if isinstance(meta, dict) else None).prepared())
                 result.bodies = tuple(bodies)
                 result.path = Path(path)
                 return result

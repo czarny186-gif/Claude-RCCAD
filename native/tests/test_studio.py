@@ -274,6 +274,22 @@ class StudioTests(unittest.TestCase):
         self.assertEqual(w.ex_value.value(),10);self.assertEqual(w.ex_op.currentData(),'new')
         w.set_mode('mod');self.assertEqual(w.mod_size.value(),2)
 
+    def test_tab_numeric_edit_polygon_sides_and_clear_all(self):
+        w=self.w
+        self.sketch('rect',(0,0),(20,10))
+        sk=w.document.bodies[-1];self.assertEqual(sk.meta['tool'],'rect')
+        w.set_mode(None);w.selected=[sk.id];self.assertTrue(w.open_dim_edit())
+        self.assertEqual([e.text() for e in w.dim_edits if e.isVisible()],['20.0','10.0'])
+        w.dim_edits[0].setText('30');w.dim_edits[1].setText('5');w.apply_dim_edit();self.wait()
+        b=k.bounds(w.document.bodies[-1].shape);self.assertAlmostEqual(b.xlen,30,3);self.assertAlmostEqual(b.ylen,5,3)
+        w.set_mode('plane');w.plane_picked('XY');w.choose_tool('polygon');w.sketch_clicked('XY',0,0)
+        self.assertTrue(w.open_dim_input());self.assertEqual(len([e for e in w.dim_edits if e.isVisible()]),2)
+        w.dim_edits[0].setText('10');w.dim_edits[1].setText('6');w.apply_typed();self.wait()
+        self.assertEqual(w.document.bodies[-1].meta['sides'],6);self.assertEqual(len(w.document.bodies[-1].shape.Edges()),6)
+        with patch.object(QMessageBox,'question',return_value=QMessageBox.Yes):w.clear_all()
+        self.assertEqual(len(w.document.bodies),0)
+        w.undo();self.assertTrue(w.document.bodies)
+
     def test_cube_button_picks_sketch_plane_and_grid_adapts(self):
         w=self.w;w.set_mode('plane');w._cube_clicked('X');self.assertEqual((w.mode,w.sketch_plane),('sketch','YZ'))
         w.view.opts['distance']=400;w.view.update();far=w.view._grid_key[0]

@@ -41,7 +41,7 @@ HINTS = {
 VARIANT_LABELS = {'rect': '2 narożniki', 'centerRect': 'Od środka', 'rect3': '3 punkty', 'circle': 'Środek + promień',
                   'circleTangent2': 'Styczny do 2 elementów', 'circle2': 'Od 2 punktów', 'circle3': 'Od 3 punktów'}
 DIM_LABELS = {'rect': ('Szerokość (mm)', 'Wysokość (mm)'), 'centerRect': ('Szerokość (mm)', 'Wysokość (mm)'), 'ellipse': ('Szerokość (mm)', 'Wysokość (mm)'),
-              'circle': ('Promień (mm)',), 'polygon': ('Promień (mm)',), 'circle2': ('Średnica (mm)',),
+              'circle': ('Promień (mm)',), 'polygon': ('Promień (mm)', 'Ilość kątów'), 'circle2': ('Średnica (mm)',),
               'line': ('Długość (mm)', 'Kąt (°)'), 'construction': ('Długość (mm)', 'Kąt (°)'), 'measure': ('Długość (mm)', 'Kąt (°)')}
 AXES = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
 AXIS_COLORS = ((.89, .31, .33, 1), (.14, .64, .42, 1), (.2, .5, .9, 1))
@@ -223,12 +223,12 @@ class StudioWindow(QMainWindow):
 
     def _build_overlays(self):
         v = self.view
-        icons = [('file', ui.svg_icon(ui.file_svg('fileTool.svg'), normal='#222222', size=34), 'Plik'),
-                 ('sketch', ui.png_icon('newSketch.png'), 'Nowy szkic'),
-                 ('extrude', ui.png_icon('extrudeTool.png'), 'Wyciągnij'),
-                 ('bool', ui.png_icon('boolTool.png'), 'Boolean / CSG'),
-                 ('mod', ui.png_icon('modTool.png'), 'Edytuj bryłę — zaokrąglenie i fazowanie'),
-                 ('mirror', ui.png_icon('mirrorTool.png'), 'Odbicie lustrzane')]
+        icons = [('file', ui.style_icon('file', 38), 'Plik'),
+                 ('sketch', ui.style_icon('sketch', 38), 'Nowy szkic'),
+                 ('extrude', ui.style_icon('extrude', 38), 'Wyciągnij'),
+                 ('bool', ui.style_icon('bool', 38), 'Boolean / CSG'),
+                 ('mod', ui.style_icon('mod', 38), 'Edytuj bryłę — zaokrąglenie i fazowanie'),
+                 ('mirror', ui.style_icon('mirror', 38), 'Odbicie lustrzane')]
         self.tools = {}
         for key, icon, tip in icons:
             button = ui.big_tool(icon, tip, checkable=key != 'file')
@@ -245,15 +245,16 @@ class StudioWindow(QMainWindow):
                     'stroke-linecap="round" stroke-linejoin="round"/><path d="M5 14h13a7 7 0 0 1 0 14h-4" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg>')
         redo_svg = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M21 8l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2.6" '
                     'stroke-linecap="round" stroke-linejoin="round"/><path d="M27 14H14a7 7 0 0 0 0 14h4" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg>')
-        self.undo_button = self._round(undo_svg, 'Cofnij (Ctrl+Z)', self.undo)
-        self.redo_button = self._round(redo_svg, 'Ponów (Ctrl+Y)', self.redo)
+        self.clear_button = self._round(ui.style_icon('trash', 24), 'Wyczyść całe pole', self.clear_all)
+        self.undo_button = self._round(ui.style_icon('undo', 24), 'Cofnij (Ctrl+Z)', self.undo)
+        self.redo_button = self._round(ui.style_icon('redo', 24), 'Ponów (Ctrl+Y)', self.redo)
         self.layers = QToolButton(v)
         self.layers.setObjectName('layers')
         self.layers.setCheckable(True)
         self.layers.setChecked(True)
         self.layers.setFixedSize(40, 40)
-        self.layers.setIcon(ui.tinted_icon('planes.png', '#e5262b', '#ffffff', 29))
-        self.layers.setIconSize(QSize(29, 29))
+        self.layers.setIcon(ui.style_icon('layers', 26))
+        self.layers.setIconSize(QSize(26, 26))
         self.layers.setToolTip('Pokaż / ukryj płaszczyzny')
         self.layers.toggled.connect(self._planes_toggled)
         ui.shadow(self.layers, 12, 3, 28)
@@ -272,7 +273,8 @@ class StudioWindow(QMainWindow):
         ui.shadow(self.xray, 12, 3, 28)
         self.home = QToolButton(v)
         self.home.setObjectName('home')
-        self.home.setText('⌂')
+        self.home.setIcon(ui.style_icon('home', 24))
+        self.home.setIconSize(QSize(24, 24))
         self.home.setFixedSize(36, 36)
         self.home.setToolTip('Widok domowy')
         self.home.clicked.connect(lambda: (self.view.set_view('iso'), self.view.fit_all(), self._mark_view('iso')))
@@ -374,11 +376,11 @@ class StudioWindow(QMainWindow):
         self._build_dim_panel()
         self._build_panels()
 
-    def _round(self, svg, tip, callback):
+    def _round(self, icon, tip, callback):
         button = QToolButton(self.view)
         button.setObjectName('round')
-        button.setIcon(ui.svg_icon(svg, normal='#344e69', active='#ffffff', size=23))
-        button.setIconSize(QSize(23, 23))
+        button.setIcon(icon)
+        button.setIconSize(QSize(24, 24))
         button.setFixedSize(40, 40)
         button.setToolTip(tip)
         button.clicked.connect(lambda _=False: callback())
@@ -453,7 +455,7 @@ class StudioWindow(QMainWindow):
         lay.setContentsMargins(13, 11, 13, 11)
         lay.setSpacing(8)
         self.dim_labels, self.dim_edits = [], []
-        for _ in range(2):
+        for _ in range(3):
             col = QVBoxLayout()
             col.setSpacing(4)
             label = QLabel('')
@@ -465,12 +467,14 @@ class StudioWindow(QMainWindow):
             lay.addLayout(col)
             self.dim_labels.append(label)
             self.dim_edits.append(edit)
-        help_ = QLabel('Tab: kolejny wymiar\nEnter: zatwierdź')
+        help_ = QLabel('Tab: kolejne pole\nEnter: zatwierdź\nEsc: anuluj')
         help_.setObjectName('help')
         lay.addWidget(help_)
         ui.shadow(self.dim_panel, 20, 5, 37)
         self.dim_panel.hide()
         self.dim_edit = self.dim_edits[0]   # zgodność wsteczna
+        self._dim_target = None
+        self.dim_panel.installEventFilter(self)
 
     def _build_panels(self):
         # --- wyciągnięcie: panel opcji + górny pasek ---
@@ -594,6 +598,7 @@ class StudioWindow(QMainWindow):
         for i, key in enumerate(('file', 'sketch', 'extrude', 'bool', 'mod', 'mirror')):
             self.tools[key].move(18 + 60 * i, 18)
         self.shape_bar.move(18, 80)
+        self.clear_button.move(W - 446, 20)
         self.undo_button.move(W - 398, 20)
         self.redo_button.move(W - 350, 20)
         self.layers.move(W - 302, 20)
@@ -619,11 +624,31 @@ class StudioWindow(QMainWindow):
         self.ex_panel.move(18, 170)
         self.ex_bar.adjustSize()
         self.ex_bar.move(346, 170)
-        for w in (*self.tools.values(), self.shape_bar, self.undo_button, self.redo_button, self.layers, self.xray, self.home, self.cube, self.pad,
+        for w in (*self.tools.values(), self.shape_bar, self.clear_button, self.undo_button, self.redo_button, self.layers, self.xray, self.home, self.cube, self.pad,
                   self.t_editor, self.sk_bar, self.origin_label, *self.panels, self.dim_panel, self.dim, self.notice):
             w.raise_()
 
     def eventFilter(self, obj, event):
+        if not hasattr(self, '_dim_target'):
+            return super().eventFilter(obj, event)
+        if obj is self.dim_panel and event.type() == QEvent.Hide and self._dim_target is not None:
+            self._dim_target = None
+            self.view.set_preview_mesh(None)
+        if event.type() == QEvent.KeyPress and event.key() == Qt.Key_Tab and self.isActiveWindow() and not self.busy and not isinstance(QApplication.focusWidget(), QPlainTextEdit):
+            if self.dim_panel.isVisible():
+                edits = [e for e in self.dim_edits if e.isVisible()]
+                if len(edits) > 1:
+                    index = next((i for i, e in enumerate(edits) if e.hasFocus()), -1)
+                    edits[(index + 1) % len(edits)].setFocus()
+                    edits[(index + 1) % len(edits)].selectAll()
+                return True
+            if self.mode == 'sketch' and self.points and self.open_dim_input():
+                return True
+            if self.mode in (None, 'sketch') and not self.points and not self.tangent_lines and self.tool not in ('trim',):
+                if self.mode is None and not self.selected and self._sketch_edit_target() is None:
+                    return super().eventFilter(obj, event)
+                if self.open_dim_edit():
+                    return True
         if event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Return, Qt.Key_Enter) and self.isActiveWindow() and not self.busy:
             action = {'extrude': self.apply_extrude, 'bool': self.apply_bool, 'mod': self.apply_mod, 'mirror': self.apply_mirror,
                       'move': self.apply_transform, 'rotate': self.apply_transform}.get(self.mode)
@@ -1016,7 +1041,8 @@ class StudioWindow(QMainWindow):
             self.show_sketch_hint()
             return
         try:
-            self.create_sketch([kernel.polyline(self.sketch_plane, points, closed)])
+            meta = dict(tool='line', points=[list(p) for p in points], sides=self.sides) if len(points) == 2 and not closed else None
+            self.create_sketch([kernel.polyline(self.sketch_plane, points, closed)], None, meta)
         except kernel.CadError as exc:
             self.toast(str(exc))
 
@@ -1035,16 +1061,19 @@ class StudioWindow(QMainWindow):
             self.toast(str(exc))
             self.show_sketch_hint()
             return
-        self.create_sketch([shape], 'Konstrukcja' if self.tool == 'construction' else ('Punkt' if self.tool == 'point' else None))
+        meta = dict(tool=self.tool, points=[list(p) for p in points[:2]], sides=self.sides) if self.tool in self.EDITABLE and len(points) == 2 else None
+        self.create_sketch([shape], 'Konstrukcja' if self.tool == 'construction' else ('Punkt' if self.tool == 'point' else None), meta)
 
-    def create_sketch(self, shapes, label=None):
+    def create_sketch(self, shapes, label=None, meta=None):
         plane = self.sketch_plane
         name = f'{label or "Szkic"} {self._plane_label()}'
-        self.run_operation('Tworzenie szkicu', lambda: [Body(name, sh, 'sketch', plane).prepared() for sh in shapes], self.add_prepared_many)
+        self.run_operation('Tworzenie szkicu', lambda: [replace(Body(name, sh, 'sketch', plane).prepared(), meta=meta) for sh in shapes], self.add_prepared_many)
         self.show_sketch_hint()
 
     def add_prepared_many(self, bodies):
         self.document.commit((*self.document.bodies, *bodies))
+        if bodies and bodies[-1].meta:
+            self._last_sketch_id = bodies[-1].id
         if self.mode != 'sketch':
             self.selected = [b.id for b in bodies]
 
@@ -1099,14 +1128,15 @@ class StudioWindow(QMainWindow):
         labels = DIM_LABELS.get(self.tool)
         if self.mode != 'sketch' or not self.points or not labels:
             return False
-        for i in range(2):
+        self._dim_target = None
+        for i in range(len(self.dim_edits)):
             visible = i < len(labels)
             self.dim_labels[i].setVisible(visible)
             self.dim_edits[i].setVisible(visible)
             if visible:
                 self.dim_labels[i].setText(labels[i])
                 self.dim_edits[i].blockSignals(True)
-                self.dim_edits[i].setText(first if i == 0 else '')
+                self.dim_edits[i].setText(first if i == 0 else (str(self.sides) if labels[i].startswith('Ilość') else ''))
                 self.dim_edits[i].blockSignals(False)
         pos = self.view.mapFromGlobal(QCursor.pos())
         self.dim_panel.adjustSize()
@@ -1134,21 +1164,134 @@ class StudioWindow(QMainWindow):
         v = self._typed_values()
         if not v or v[0] is None:
             return None
-        u0, v0 = self.points[-1] if self.tool == 'line' else self.points[0]
-        sx = 1 if self.last_uv[0] >= u0 else -1
-        sy = 1 if self.last_uv[1] >= v0 else -1
-        t = self.tool
+        self._apply_typed_sides(v)
+        p0 = self.points[-1] if self.tool == 'line' else self.points[0]
+        return self._dim_end(self.tool, p0, self.last_uv, v)
+
+    def _apply_typed_sides(self, v):
+        if self.tool == 'polygon' and len(v) > 1 and v[1] is not None and 3 <= int(v[1]) <= 64:
+            self.sides = int(v[1])
+
+    @staticmethod
+    def _dim_end(t, p0, ref, v, direction=None):
+        """Punkt końcowy figury z wpisanych wymiarów; ref wyznacza stronę (znaki), direction - kierunek promienia."""
+        u0, v0 = p0
+        sx = 1 if ref[0] >= u0 else -1
+        sy = 1 if ref[1] >= v0 else -1
         if t in ('rect', 'ellipse', 'centerRect'):
             w = v[0]
             h = v[1] if len(v) > 1 and v[1] is not None else v[0]
             k = .5 if t in ('centerRect', 'ellipse') else 1
             return (u0 + sx * w * k, v0 + sy * h * k)
         if t in ('circle', 'polygon', 'circle2'):
-            return (u0 + v[0], v0)
+            d = direction or (1.0, 0.0)
+            return (u0 + v[0] * d[0], v0 + v[0] * d[1])
         ang = math.radians(v[1]) if len(v) > 1 and v[1] is not None else 0.0
         return (u0 + v[0] * math.cos(ang), v0 + v[0] * math.sin(ang))
 
+    # ---------- edycja wymiarów istniejącego szkicu (Tab po zaznaczeniu) ----------
+    EDITABLE = ('rect', 'centerRect', 'ellipse', 'circle', 'circle2', 'polygon', 'line')
+
+    def _sketch_edit_target(self):
+        chosen = [b for b in (self.document.get(i) for i in self.selected) if b is not None and b.kind == 'sketch' and b.meta]
+        if len(chosen) == 1:
+            return chosen[0]
+        last = self.document.get(getattr(self, '_last_sketch_id', None)) if getattr(self, '_last_sketch_id', None) else None
+        return last if last is not None and last.meta else None
+
+    @staticmethod
+    def _dim_initial(tool, pts, sides):
+        (u0, v0), (u1, v1) = pts[0], pts[1]
+        du, dv, dist = abs(u1 - u0), abs(v1 - v0), math.hypot(u1 - u0, v1 - v0)
+        r = lambda x: str(round(float(x), 3))
+        if tool == 'rect':
+            return [r(du), r(dv)]
+        if tool in ('centerRect', 'ellipse'):
+            return [r(2 * du), r(2 * dv)]
+        if tool == 'polygon':
+            return [r(dist), str(int(sides))]
+        if tool in ('circle', 'circle2'):
+            return [r(dist)]
+        return [r(dist), r(math.degrees(math.atan2(v1 - v0, u1 - u0)))]
+
+    def open_dim_edit(self):
+        body = self._sketch_edit_target()
+        if body is None or body.meta.get('tool') not in self.EDITABLE:
+            self.toast('Zaznacz szkic narysowany z wymiarami (prostokąt, okrąg, wielokąt, elipsa, linia).')
+            return False
+        meta = body.meta
+        tool = meta['tool']
+        pts = [tuple(p) for p in meta['points']]
+        labels = DIM_LABELS[tool]
+        values = self._dim_initial(tool, pts, meta.get('sides', 5))
+        for i in range(len(self.dim_edits)):
+            visible = i < len(labels)
+            self.dim_labels[i].setVisible(visible)
+            self.dim_edits[i].setVisible(visible)
+            if visible:
+                self.dim_labels[i].setText(labels[i])
+                self.dim_edits[i].blockSignals(True)
+                self.dim_edits[i].setText(values[i])
+                self.dim_edits[i].blockSignals(False)
+        self.dim_panel.adjustSize()
+        self.dim_panel.move(max(0, (self.view.width() - self.dim_panel.width()) // 2), 90)
+        self.dim_panel.show()
+        self._dim_target = dict(body=body, tool=tool, pts=pts, sides=meta.get('sides', 5))
+        self.dim_panel.raise_()
+        self.dim_edits[0].setFocus()
+        self.dim_edits[0].selectAll()
+        self.dim.hide()
+        self._dim_edit_shape()
+        return True
+
+    def _dim_edit_shape(self):
+        """(kształt, nowe punkty, liczba boków) z wpisanych wartości albo None."""
+        t = self._dim_target
+        v = self._typed_values()
+        if t is None or not v or v[0] is None:
+            return None
+        tool, pts, sides = t['tool'], t['pts'], t['sides']
+        if tool == 'polygon' and len(v) > 1 and v[1] is not None and 3 <= int(v[1]) <= 64:
+            sides = int(v[1])
+        (u0, v0), (u1, v1) = pts[0], pts[1]
+        dist = math.hypot(u1 - u0, v1 - v0)
+        direction = ((u1 - u0) / dist, (v1 - v0) / dist) if dist > 1e-9 else None
+        end = self._dim_end(tool, pts[0], pts[1], v, direction)
+        new_pts = [pts[0], end]
+        plane = t['body'].plane
+        try:
+            shape = kernel.polyline(plane, new_pts, False) if tool == 'line' else kernel.sketch_shape(tool, plane, new_pts, sides)
+        except Exception:
+            return None
+        return shape, new_pts, sides
+
+    def apply_dim_edit(self):
+        result = self._dim_edit_shape()
+        target = self._dim_target
+        self.dim_panel.hide()
+        self.view.setFocus()
+        self.view.set_preview_mesh(None)
+        if result is None or target is None:
+            return
+        shape, new_pts, sides = result
+        old = target['body']
+        meta = dict(old.meta, points=[list(p) for p in new_pts], sides=sides)
+
+        def build():
+            return replace(old, shape=shape, mesh=kernel.display_mesh(shape), meta=meta)
+
+        def apply(body):
+            self.document.commit([body if b.id == body.id else b for b in self.document.bodies])
+            self._last_sketch_id = body.id
+
+        self.run_operation('Zmiana wymiarów szkicu', build, apply)
+
     def update_dim_preview(self):
+        if self._dim_target is not None:
+            result = self._dim_edit_shape()
+            if self.dim_panel.isVisible() and result is not None:
+                self.view.set_preview_mesh(kernel.display_mesh(result[0]), line_color=SKETCH_ORANGE, width=2.4)
+            return
         if not self.dim_panel.isVisible() or not self.points:
             return
         end = self.typed_end()
@@ -1158,6 +1301,9 @@ class StudioWindow(QMainWindow):
         self.view.set_marker(kernel.to_world(self.sketch_plane, *end), label='Wymiar')
 
     def apply_typed(self):
+        if self._dim_target is not None:
+            self.apply_dim_edit()
+            return
         end = self.typed_end()
         self.dim_panel.hide()
         self.view.setFocus()
@@ -1322,7 +1468,7 @@ class StudioWindow(QMainWindow):
             t = float(np.linalg.norm(np.asarray(hit[2], float) - ray[0])) if ray else 0.0
             solid = (t, dict(kind='face', id=body.id, face=face, wire=face.outerWire(), plane=None, normal=tuple(float(c) for c in normal),
                              center=face.Center().toTuple()))
-        if region is not None and (solid is None or region[0] <= solid[0] + 1e-6):
+        if region is not None and (solid is None or region[0] <= solid[0] + max(5e-3, 1e-4 * solid[0])):
             frame = kernel.frame_of(region[1])
             face = region[2]
             return dict(kind='region', id=None, face=face, wire=face.outerWire(), plane=region[1], normal=tuple(frame.normal), center=face.Center().toTuple())
@@ -2054,6 +2200,22 @@ class StudioWindow(QMainWindow):
         self.document.commit((*self.document.bodies, body))
         if self.mode != 'sketch':
             self.selected = [body.id]
+
+    def clear_all(self):
+        if self.busy:
+            return
+        if not self.document.bodies:
+            self.toast('Pole robocze jest już puste.')
+            return
+        answer = QMessageBox.question(self, 'Wyczyścić pole', 'Na pewno wyczyścić całe pole?\nWszystkie bryły i szkice zostaną usunięte (można cofnąć Ctrl+Z).',
+                                      QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if answer != QMessageBox.Yes:
+            return
+        self.set_mode(None)
+        self.document.commit(())
+        self.selected = []
+        self.edges = {}
+        self.refresh()
 
     def undo(self):
         if not self.busy:

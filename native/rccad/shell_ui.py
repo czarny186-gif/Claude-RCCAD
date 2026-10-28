@@ -21,27 +21,28 @@ def style():
 QToolTip { background:#fff; color:#29475e; border:1px solid #b2c7db; padding:4px 7px; }
 QToolButton#tool { background:#fff; border:1px solid #bdcbd8; border-radius:11px; }
 QToolButton#tool:hover { background:#eef8ff; border:1px solid #2087d6; }
-QToolButton#tool:checked, QToolButton#tool:checked:hover { background:#080808; border:2px solid #080808; }
+QToolButton#tool:checked, QToolButton#tool:checked:hover { background:#2f87e8; border:2px solid #2f87e8; }
 QToolButton#round { background:#fff; border:1px solid #bdcbd8; border-radius:20px; color:#344e69; }
-QToolButton#round:hover:enabled { background:#080808; color:#fff; border-color:#080808; }
+QToolButton#round:hover:enabled { background:#e9f3ff; color:#17314a; border-color:#2f87e8; }
 QToolButton#round:disabled { background:#fff; border:1px solid #d7dfe8; color:#b9c4d0; }
-QToolButton#layers { background:#fff; border:1px solid #e4b9b9; border-radius:9px; }
-QToolButton#layers:checked { background:#324c68; border:1px solid #b7c7d7; }
-QToolButton#layers:hover { background:#080808; border:1px solid #080808; }
+QToolButton#layers { background:#fff; border:1px solid #cbd9e6; border-radius:9px; }
+QToolButton#layers:checked { background:#2f87e8; border:1px solid #2f87e8; }
+QToolButton#layers:hover { background:#e9f3ff; border:1px solid #2f87e8; }
+QToolButton#layers:checked:hover { background:#2f87e8; }
 QToolButton#home { background:#fff; border:1px solid #cbd9e6; border-radius:9px; color:#496780; font-size:22px; }
 QToolButton#home:hover { background:#dcefff; }
 QToolButton#shapeMain { background:#fff; border:1px solid #cbd9e6; border-radius:8px; }
 QToolButton#shapeMain[grouped="true"] { border-top-right-radius:0; border-bottom-right-radius:0; }
-QToolButton#shapeMain:hover, QToolButton#shapeMain:checked { background:#080808; border-color:#080808; }
+QToolButton#shapeMain:hover, QToolButton#shapeMain:checked { background:#2f87e8; border-color:#2f87e8; }
 QToolButton#shapeExpand { background:#fff; border:1px solid #cbd9e6; border-left:0; border-radius:8px; border-top-left-radius:0; border-bottom-left-radius:0; color:#344e69; font-size:11px; }
-QToolButton#shapeExpand:hover { background:#080808; color:#fff; }
+QToolButton#shapeExpand:hover { background:#2f87e8; color:#fff; }
 QToolButton#padTool { background:#fff; border:1px solid #bdccdb; border-radius:8px; color:#344e69; font-size:18px; font-weight:600; }
 QToolButton#padTool:hover { border-color:#187ac1; }
-QToolButton#padTool:checked { background:#111; color:#fff; border-color:#111; }
+QToolButton#padTool:checked { background:#2f87e8; color:#fff; border-color:#2f87e8; }
 QToolButton#cubeX, QToolButton#cubeY, QToolButton#cubeZ, QToolButton#cubeI { border:1px solid transparent; border-radius:18px; color:#fff; font-weight:700; font-size:12px; }
 QToolButton#cubeX { background:#dc5658; } QToolButton#cubeY { background:#39a56d; } QToolButton#cubeZ { background:#4589e7; } QToolButton#cubeI { background:#677e99; }
 QToolButton#cubeX:hover, QToolButton#cubeY:hover, QToolButton#cubeZ:hover, QToolButton#cubeI:hover { border:1px solid #fff; }
-QToolButton#cubeX:checked, QToolButton#cubeY:checked, QToolButton#cubeZ:checked, QToolButton#cubeI:checked { background:#080808; border:2px solid #aab8c8; }
+QToolButton#cubeX:checked, QToolButton#cubeY:checked, QToolButton#cubeZ:checked, QToolButton#cubeI:checked { background:#2f87e8; border:2px solid #aab8c8; }
 QFrame#floating { background:rgba(255,255,255,0.94); border:1px solid #d0dce8; border-radius:13px; }
 QFrame#bar { background:rgba(255,255,255,0.93); border:1px solid #bdccdb; border-radius:13px; }
 QFrame#toolbar { background:rgba(255,255,255,0.92); border:1px solid #cbd9e6; border-radius:12px; }
@@ -438,3 +439,14 @@ class StepRow(QFrame):
         self.value.setText(value)
         self.value.setStyleSheet('color:#6c869b;border:none;')
         self.title.setStyleSheet('font-weight:700;color:#27415a;border:none;')
+
+
+def style_icon(name: str, size: int = 29) -> QIcon:
+    """Ikona w jednolitym stylu aplikacji: kontur w kolorze atramentu, pomarańczowy akcent; biała, gdy przycisk jest wciśnięty."""
+    icon = QIcon()
+    ink, white = icons.pixmap('t_' + name, size), icons.pixmap('t_' + name + '_w', size)
+    icon.addPixmap(ink, QIcon.Normal, QIcon.Off)
+    icon.addPixmap(ink, QIcon.Active, QIcon.Off)
+    icon.addPixmap(white, QIcon.Normal, QIcon.On)
+    icon.addPixmap(white, QIcon.Active, QIcon.On)
+    return icon
