@@ -3,12 +3,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import re
-from PySide6.QtCore import QByteArray, QRectF, QSize, Qt
+from PySide6.QtCore import QByteArray, QPoint, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QPushButton, QToolButton, QVBoxLayout, QWidget, QApplication
 
 ASSETS = Path(__file__).resolve().parent / 'assets'
+MENU_MARGIN = (16, 10, 16, 22)
 
 INK = '#344e69'
 PANEL_TEXT = '#29475e'
@@ -33,9 +34,10 @@ QToolButton#home { background:#fff; border:1px solid #cbd9e6; border-radius:9px;
 QToolButton#home:hover { background:#dcefff; }
 QToolButton#shapeMain { background:#fff; border:1px solid #cbd9e6; border-radius:8px; }
 QToolButton#shapeMain[grouped="true"] { border-top-right-radius:0; border-bottom-right-radius:0; }
-QToolButton#shapeMain:hover, QToolButton#shapeMain:checked { background:#2f87e8; border-color:#2f87e8; }
+QToolButton#shapeMain:hover { background:#e9f3ff; border-color:#2f87e8; }
+QToolButton#shapeMain:checked, QToolButton#shapeMain:checked:hover { background:#2f87e8; border-color:#2f87e8; }
 QToolButton#shapeExpand { background:#fff; border:1px solid #cbd9e6; border-left:0; border-radius:8px; border-top-left-radius:0; border-bottom-left-radius:0; color:#344e69; font-size:11px; }
-QToolButton#shapeExpand:hover { background:#2f87e8; color:#fff; }
+QToolButton#shapeExpand:hover { background:#e9f3ff; color:#17314a; }
 QToolButton#padTool { background:#fff; border:1px solid #bdccdb; border-radius:8px; color:#344e69; font-size:18px; font-weight:600; }
 QToolButton#padTool:hover { border-color:#187ac1; }
 QToolButton#padTool:checked { background:#2f87e8; color:#fff; border-color:#2f87e8; }
@@ -223,13 +225,17 @@ class PopupMenu(QFrame):
     """Menu w stylu HTML (#fileMenu / #ctxMenu / warianty kształtów): wiersze z opisem po prawej, czarne podświetlenie."""
 
     def __init__(self, parent, items, min_width=170, row_height=None):
-        super().__init__(parent, Qt.Popup | Qt.FramelessWindowHint)
-        self.setObjectName('popup')
+        super().__init__(parent, Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
-        lay = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(*MENU_MARGIN)
+        self.card = QFrame()
+        self.card.setObjectName('popup')
+        outer.addWidget(self.card)
+        lay = QVBoxLayout(self.card)
         lay.setContentsMargins(6, 6, 6, 6)
         lay.setSpacing(2)
-        self.setMinimumWidth(min_width)
+        self.setMinimumWidth(min_width + MENU_MARGIN[0] * 2)
         self.actions = []
         for item in items:
             text, hint, callback = item[0], item[1], item[2]
@@ -254,11 +260,11 @@ class PopupMenu(QFrame):
             button.clicked.connect(lambda _=False, cb=callback: (self.close(), cb()))
             lay.addWidget(button)
             self.actions.append((text, button))
-        shadow(self, 22, 6, 68)
+        shadow(self.card, 22, 6, 60)
 
     def popup_at(self, global_pos):
         self.adjustSize()
-        self.move(global_pos)
+        self.move(global_pos - QPoint(MENU_MARGIN[0], MENU_MARGIN[1]))
         self.show()
 
 
@@ -342,11 +348,15 @@ class RichMenu(QFrame):
     def __init__(self, parent, entries, title='', min_width=300):
         super().__init__(parent, Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.setObjectName('rich')
-        lay = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(*MENU_MARGIN)
+        self.card = QFrame()
+        self.card.setObjectName('rich')
+        outer.addWidget(self.card)
+        lay = QVBoxLayout(self.card)
         lay.setContentsMargins(8, 8, 8, 8)
         lay.setSpacing(2)
-        self.setMinimumWidth(min_width)
+        self.setMinimumWidth(min_width + MENU_MARGIN[0] * 2)
         if title:
             head = QLabel(title.upper())
             head.setObjectName('richhead')
@@ -391,11 +401,11 @@ class RichMenu(QFrame):
             button.clicked.connect(lambda _=False, cb=callback: (self.close(), cb()))
             lay.addWidget(button)
             self.actions.append((text, button))
-        shadow(self, 26, 8, 70)
+        shadow(self.card, 24, 6, 60)
 
     def popup_at(self, global_pos):
         self.adjustSize()
-        self.move(global_pos)
+        self.move(global_pos - QPoint(MENU_MARGIN[0], MENU_MARGIN[1]))
         self.show()
 
 

@@ -1,5 +1,6 @@
 """Ikony operacji rysowane wektorowo (QPainter) — kolorowe, czytelne piktogramy w panelach narzędzi."""
 from __future__ import annotations
+import math
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
 
@@ -151,6 +152,37 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             p.drawPolyline(poly([(m(15), 11), (m(7), 19), (m(15), 27)]))
             path = QPainterPath(); path.moveTo(m(8), 19); path.lineTo(m(28), 19); path.cubicTo(m(41), 19, m(41), 38, m(28), 38); path.lineTo(m(20), 38)
             p.drawPath(path)
+        elif name.startswith('s_'):
+            dot = lambda x, y, c=None: (p.setBrush(QColor(c or acc)), p.setPen(pen('#ffffff' if white else '#ffffff', 1.6)), p.drawEllipse(QPointF(x, y), 3.6, 3.6))
+            sh = name[2:]
+            if sh == 'line':
+                st(ink, 3.0); p.drawLine(QPointF(10, 38), QPointF(38, 10)); dot(10, 38); dot(38, 10)
+            elif sh == 'rect':
+                fl(_rounded(8, 13, 32, 22, 2), soft); dot(8, 13); dot(40, 35)
+            elif sh == 'circle':
+                fl(_circle(24, 24, 15), soft); st(acc, 2.4); p.drawLine(QPointF(24, 24), QPointF(34.6, 13.4)); dot(24, 24, ink); dot(34.6, 13.4)
+            elif sh == 'text':
+                st(ink, 3.4); p.drawLine(QPointF(11, 12), QPointF(37, 12)); p.drawLine(QPointF(24, 12), QPointF(24, 38))
+                st(acc, 3.0); p.drawLine(QPointF(17, 40), QPointF(31, 40))
+            elif sh == 'ellipse':
+                path = QPainterPath(); path.addEllipse(QRectF(6, 14, 36, 20)); fl(path, soft); dot(24, 24, acc)
+            elif sh == 'slot':
+                path = QPainterPath(); path.addRoundedRect(QRectF(6, 15, 36, 18), 9, 9); fl(path, soft); dot(15, 24); dot(33, 24)
+            elif sh == 'polygon':
+                pts = [(24 + 16 * math.sin(2 * math.pi * k / 5), 25 - 16 * math.cos(2 * math.pi * k / 5)) for k in range(5)]
+                path = QPainterPath(); path.addPolygon(poly(pts + [pts[0]])); fl(path, soft); dot(24, 25, ink); dot(*pts[0])
+            elif sh == 'arc':
+                st(ink, 3.0); p.drawArc(QRectF(7, 17, 34, 34), 28 * 16, 124 * 16); dot(10.5, 30); dot(37.5, 30); dot(24, 17, ink)
+            elif sh == 'point':
+                st(ink, 2.4); p.drawLine(QPointF(24, 8), QPointF(24, 40)); p.drawLine(QPointF(8, 24), QPointF(40, 24)); dot(24, 24)
+            elif sh == 'construction':
+                pn = pen(acc, 3.0); pn.setStyle(Qt.DashLine); p.setPen(pn); p.setBrush(Qt.NoBrush); p.drawLine(QPointF(9, 38), QPointF(39, 10)); dot(9, 38, ink); dot(39, 10, ink)
+            elif sh == 'measure':
+                st(ink, 2.6); p.drawLine(QPointF(8, 31), QPointF(40, 31)); p.drawLine(QPointF(8, 24), QPointF(8, 38)); p.drawLine(QPointF(40, 24), QPointF(40, 38))
+                st(acc, 3.0); p.drawLine(QPointF(15, 17), QPointF(33, 17)); p.drawPolyline(poly([(19, 13), (14, 17), (19, 21)])); p.drawPolyline(poly([(29, 13), (34, 17), (29, 21)]))
+            elif sh == 'trim':
+                st(ink, 2.8); p.drawLine(QPointF(14, 14), QPointF(40, 36)); p.drawLine(QPointF(14, 34), QPointF(40, 12))
+                st(acc, 2.6); p.drawEllipse(QPointF(11, 12), 4.5, 4.5); p.drawEllipse(QPointF(11, 36), 4.5, 4.5)
         elif name == 'trash':
             st(ink, 2.8); p.drawLine(QPointF(9, 13), QPointF(39, 13)); p.drawPolyline(poly([(19, 13), (19, 8), (29, 8), (29, 13)]))
             body = QPainterPath(); body.moveTo(12, 13); body.lineTo(14, 41); body.lineTo(34, 41); body.lineTo(36, 13)
@@ -213,12 +245,16 @@ def badge(kind: str, color: str = BLUE, size: int = 34) -> QPixmap:
     pm.fill(Qt.transparent)
     p = QPainter(pm)
     p.setRenderHint(QPainter.Antialiasing)
-    p.setBrush(QColor(color)); p.setPen(Qt.NoPen)
-    p.drawRoundedRect(QRectF(0, 0, size * scale, size * scale), 10 * scale, 10 * scale)
+    tint, edge = QColor(color), QColor(color)
+    tint.setAlpha(34); edge.setAlpha(120)
+    p.setBrush(tint); p.setPen(QPen(edge, 1.4 * scale))
+    p.drawRoundedRect(QRectF(scale, scale, (size - 2) * scale, (size - 2) * scale), 10 * scale, 10 * scale)
     p.end()
-    inner = pixmap(kind, size - 6, scale)
+    kind = {'one': 't_extrude', 'union': 't_bool', 'fillet': 't_mod', 'chamfer': 't_mod', 'mirror': 't_mirror', 'sym': 't_mirror',
+            'sketch': 't_sketch', 'extrude': 't_extrude', 'bool': 't_bool'}.get(kind, kind)
+    inner = pixmap(kind, size - 8, scale)
     q = QPainter(pm)
-    q.drawPixmap(3 * scale, 3 * scale, inner)
+    q.drawPixmap(4 * scale, 4 * scale, inner)
     q.end()
     pm.setDevicePixelRatio(scale)
     return pm

@@ -290,6 +290,12 @@ class StudioTests(unittest.TestCase):
         self.assertEqual(len(w.document.bodies),0)
         w.undo();self.assertTrue(w.document.bodies)
 
+    def test_shape_icons_and_menu_card(self):
+        from rccad import shell_ui as ui
+        for item in ui.load_shapes():
+            if not item['variant']:self.assertFalse(ui.style_icon('s_'+item['shape'],28).isNull(),item['shape'])
+        m=ui.RichMenu(self.w,[(ui.icons.pixmap('f_new',34),'A','b',lambda:None)],'T',300);self.assertEqual(m.card.objectName(),'rich');m.close()
+
     def test_cube_button_picks_sketch_plane_and_grid_adapts(self):
         w=self.w;w.set_mode('plane');w._cube_clicked('X');self.assertEqual((w.mode,w.sketch_plane),('sketch','YZ'))
         w.view.opts['distance']=400;w.view.update();far=w.view._grid_key[0]
