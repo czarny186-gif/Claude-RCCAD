@@ -15,6 +15,7 @@ icons_green = '#2fa56d'
 icons_orange = '#f09a22'
 from .document import Body, Document
 from .viewcube import ViewCube
+from . import sketchmeta as sm
 from .viewport import CadView
 
 NEED = {'rect': 2, 'centerRect': 2, 'rect3': 3, 'circle': 2, 'circle2': 2, 'circle3': 3, 'ellipse': 2, 'slot': 3, 'polygon': 2,
@@ -297,12 +298,15 @@ class StudioWindow(QMainWindow):
         pl.setContentsMargins(7, 7, 7, 7)
         pl.setSpacing(7)
         self.pad_buttons = {}
-        for name, text, tip in (('move', '✥', 'Przesuń zaznaczony element w osiach X, Y, Z'), ('rotate', '⟳', 'Obróć zaznaczony element')):
+        for name, text, tip in (('move', 'Przesuń', 'Przesuń zaznaczony element w osiach X, Y, Z'), ('rotate', 'Obróć', 'Obróć zaznaczony element')):
             button = QToolButton()
             button.setObjectName('padTool')
-            button.setText(text)
+            button.setIcon(ui.style_icon(name, 26))
+            button.setIconSize(QSize(26, 26))
+            button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+            button.setText(' ' + text)
             button.setCheckable(True)
-            button.setFixedSize(42, 42)
+            button.setFixedSize(112, 44)
             button.setToolTip(tip)
             button.clicked.connect(lambda _=False, n=name: self.toggle_mode(n))
             pl.addWidget(button)
@@ -1078,13 +1082,24 @@ class StudioWindow(QMainWindow):
             self.toast(str(exc))
             self.show_sketch_hint()
             return
-        meta = dict(tool=self.tool, points=[list(p) for p in points[:2]], sides=self.sides) if self.tool in self.EDITABLE and len(points) == 2 else None
+        meta = dict(tool=self.tool, points=[list(p) for p in points], sides=self.sides) if self.tool in self.EDITABLE and self.tool not in ('line', 'text') else None
         self.create_sketch([shape], 'Konstrukcja' if self.tool == 'construction' else ('Punkt' if self.tool == 'point' else None), meta)
 
-    def create_sketch(self, shapes, label=None, meta=None):
+    def create_sketch(self, shapes, label=None, meta=None, select=False):
         plane = self.sketch_plane
         name = f'{label or "Szkic"} {self._plane_label()}'
-        self.run_operation('Tworzenie szkicu', lambda: [replace(Body(name, sh, 'sketch', plane).prepared(), meta=meta) for sh in shapes], self.add_prepared_many)
+        made = [replace(Body(name, sh, 'sketch', plane).prepared(), meta=meta) for sh in shapes] if select else None
+
+        def after():
+            if select and made:
+                self.choose_tool(None)
+                self.selected = [made[-1].id]
+                self.refresh()
+                self._update_grips()
+                self.sk_hint.setText('Tekst: przesuń, skaluj lub obróć uchwytami · Tab – wysokość i kąt')
+
+        self.run_operation('Tworzenie szkicu', (lambda: made) if select else (lambda: [replace(Body(name, sh, 'sketch', plane).prepared(), meta=meta) for sh in shapes]),
+                           self.add_prepared_many, after=after if select else None)
         self.show_sketch_hint()
 
     def add_prepared_many(self, bodies):
@@ -1207,7 +1222,7 @@ class StudioWindow(QMainWindow):
         return (u0 + v[0] * math.cos(ang), v0 + v[0] * math.sin(ang))
 
     # ---------- edycja wymiarów istniejącego szkicu (Tab po zaznaczeniu) ----------
-    EDITABLE = ('rect', 'centerRect', 'ellipse', 'circle', 'circle2', 'polygon', 'line')
+    EDITABLE = sm.EDITABLE
 
     def _sketch_edit_target(self):
         chosen = [b for b in (self.document.get(i) for i in self.selected) if b is not None and b.kind == 'sketch' and b.meta]
@@ -1217,33 +1232,29 @@ class StudioWindow(QMainWindow):
         return last if last is not None and last.meta else None
 
     @staticmethod
-    def _dim_initial(tool, pts, sides):
-        (u0, v0), (u1, v1) = pts[0], pts[1]
-        du, dv, dist = abs(u1 - u0), abs(v1 - v0), math.hypot(u1 - u0, v1 - v0)
-        r = lambda x: str(round(float(x), 3))
-        if tool == 'rect':
-            return [r(du), r(dv)]
-        if tool in ('centerRect', 'ellipse'):
-            return [r(2 * du), r(2 * dv)]
-        if tool == 'polygon':
-            return [r(dist), str(int(sides))]
-        if tool in ('circle', 'circle2'):
-            return [r(dist)]
-        return [r(dist), r(math.degrees(math.atan2(v1 - v0, u1 - u0)))]
+    def _meta_shape(plane, meta):
+        t = meta['tool']
+        pts = [tuple(p) for p in meta['points']]
+        if t == 'line':
+            return kernel.polyline(plane, pts, False)
+        if t == 'arc':
+            return kernel.arc3(plane, pts)
+        if t == 'rect3':
+            return kernel.rect3(plane, pts)
+        return kernel.sketch_shape(t, plane, pts, meta.get('sides', 5))
 
     def open_dim_edit(self):
         body = self._sketch_edit_target()
         if body is None or body.meta.get('tool') not in self.EDITABLE:
-            self.toast('Zaznacz szkic narysowany z wymiarami (prostokąt, okrąg, wielokąt, elipsa, linia).')
+            self.toast('Zaznacz szkic narysowany z wymiarami (prostokąt, okrąg, wielokąt, elipsa, łuk, linia, tekst…).')
             return False
         self.selected = [body.id]
         self.refresh()
         self._update_grips()
         meta = body.meta
         tool = meta['tool']
-        pts = [tuple(p) for p in meta['points']]
-        labels = DIM_LABELS[tool]
-        values = self._dim_initial(tool, pts, meta.get('sides', 5))
+        labels = sm.LABELS[tool]
+        values = sm.values(meta)
         for i in range(len(self.dim_edits)):
             visible = i < len(labels)
             self.dim_labels[i].setVisible(visible)
@@ -1256,7 +1267,7 @@ class StudioWindow(QMainWindow):
         self.dim_panel.adjustSize()
         self.dim_panel.move(max(0, (self.view.width() - self.dim_panel.width()) // 2), 90)
         self.dim_panel.show()
-        self._dim_target = dict(body=body, tool=tool, pts=pts, sides=meta.get('sides', 5))
+        self._dim_target = dict(body=body, meta=meta)
         self.dim_panel.raise_()
         self.dim_edits[0].setFocus()
         self.dim_edits[0].selectAll()
@@ -1265,25 +1276,16 @@ class StudioWindow(QMainWindow):
         return True
 
     def _dim_edit_shape(self):
-        """(kształt, nowe punkty, liczba boków) z wpisanych wartości albo None."""
+        """(kształt, nowe meta) z wpisanych wartości albo None."""
         t = self._dim_target
         v = self._typed_values()
         if t is None or not v or v[0] is None:
             return None
-        tool, pts, sides = t['tool'], t['pts'], t['sides']
-        if tool == 'polygon' and len(v) > 1 and v[1] is not None and 3 <= int(v[1]) <= 64:
-            sides = int(v[1])
-        (u0, v0), (u1, v1) = pts[0], pts[1]
-        dist = math.hypot(u1 - u0, v1 - v0)
-        direction = ((u1 - u0) / dist, (v1 - v0) / dist) if dist > 1e-9 else None
-        end = self._dim_end(tool, pts[0], pts[1], v, direction)
-        new_pts = [pts[0], end]
-        plane = t['body'].plane
         try:
-            shape = kernel.polyline(plane, new_pts, False) if tool == 'line' else kernel.sketch_shape(tool, plane, new_pts, sides)
+            meta = sm.apply_values(t['meta'], v)
+            return self._meta_shape(t['body'].plane, meta), meta
         except Exception:
             return None
-        return shape, new_pts, sides
 
     def apply_dim_edit(self):
         result = self._dim_edit_shape()
@@ -1293,16 +1295,14 @@ class StudioWindow(QMainWindow):
         self.view.set_preview_mesh(None)
         if result is None or target is None:
             return
-        shape, new_pts, sides = result
-        self._commit_sketch_edit(target['body'], shape, new_pts, sides)
+        self._commit_sketch_edit(target['body'], result[0], result[1])
 
-    def _commit_sketch_edit(self, old, shape, new_pts, sides):
-        meta = dict(old.meta, points=[list(p) for p in new_pts], sides=sides)
-
+    def _commit_sketch_edit(self, old, shape, meta):
         def build():
             return replace(old, shape=shape, mesh=kernel.display_mesh(shape), meta=meta)
 
         def apply(body):
+            self.override = {}
             self.document.commit([body if b.id == body.id else b for b in self.document.bodies])
             self._last_sketch_id = body.id
             self.selected = [body.id]
@@ -1311,110 +1311,28 @@ class StudioWindow(QMainWindow):
         self.run_operation('Zmiana wymiarów szkicu', build, apply)
 
     # ---------- zaznaczanie i skalowanie kształtów myszą (szkic bez wybranego narzędzia) ----------
-    @staticmethod
-    def _extent(tool, pts):
-        """(umin, umax, vmin, vmax) kształtu w układzie szkicu."""
-        (u0, v0), (u1, v1) = pts[0], pts[1]
-        if tool == 'rect':
-            return min(u0, u1), max(u0, u1), min(v0, v1), max(v0, v1)
-        if tool in ('centerRect', 'ellipse'):
-            hw, hh = abs(u1 - u0), abs(v1 - v0)
-            return u0 - hw, u0 + hw, v0 - hh, v0 + hh
-        if tool == 'circle2':
-            cu, cv, r = (u0 + u1) / 2, (v0 + v1) / 2, math.hypot(u1 - u0, v1 - v0) / 2
-            return cu - r, cu + r, cv - r, cv + r
-        r = math.hypot(u1 - u0, v1 - v0)
-        return (u0 - r, u0 + r, v0 - r, v0 + r) if tool in ('circle', 'polygon') else (min(u0, u1), max(u0, u1), min(v0, v1), max(v0, v1))
-
-    def _grip_points(self, tool, pts):
-        umin, umax, vmin, vmax = self._extent(tool, pts)
-        um, vm = (umin + umax) / 2, (vmin + vmax) / 2
-        if tool in ('rect', 'centerRect'):
-            return [(umin, vmin), (umax, vmin), (umax, vmax), (umin, vmax), (um, vmin), (umax, vm), (um, vmax), (umin, vm)]
-        if tool in ('ellipse', 'circle', 'circle2'):
-            return [(um, vmin), (umax, vm), (um, vmax), (umin, vm)]
-        return [tuple(pts[0]), tuple(pts[1])]
-
-    def _update_grips(self):
+    def _update_grips(self, body=None, meta=None, mesh=None):
         grips = []
         if self.mode == 'sketch' and self.tool is None and len(self.selected) == 1:
-            body = self.document.get(self.selected[0])
+            body = body or self.document.get(self.selected[0])
             if body is not None and body.meta and body.meta.get('tool') in self.EDITABLE:
-                pts = [tuple(p) for p in body.meta['points']]
-                grips = [kernel.to_world(body.plane, *g) for g in self._grip_points(body.meta['tool'], pts)]
+                meta = meta or body.meta
+                grips = [kernel.to_world(body.plane, *g) for g in sm.grip_points(meta)]
         self.view.sketch_grips = grips
         self.view.update()
 
-    def _grab_info(self, tool, pts, uv, thr):
-        (u0, v0), (u1, v1) = pts[0], pts[1]
-        u, v = uv
-        if tool == 'line':
-            return 0 if math.hypot(u - u0, v - v0) <= math.hypot(u - u1, v - v1) else 1
-        if tool in ('circle', 'circle2', 'polygon'):
-            return 'radius'
-        if tool == 'ellipse':
-            hw, hh = max(abs(u1 - u0), 1e-9), max(abs(v1 - v0), 1e-9)
-            return 'u' if abs(u - u0) / hw > abs(v - v0) / hh else 'v'
-        umin, umax, vmin, vmax = self._extent(tool, pts)
-        dl, dr, db, dt = abs(u - umin), abs(u - umax), abs(v - vmin), abs(v - vmax)
-        side_u, side_v = ('min' if dl < dr else 'max'), ('min' if db < dt else 'max')
-        du, dv = min(dl, dr), min(db, dt)
-        if du < thr and dv < thr:
-            return ('uv', side_u, side_v)
-        return ('u', side_u, None) if du <= dv else ('v', None, side_v)
-
-    def _grab_apply(self, tool, pts, grab, uv):
-        (u0, v0), (u1, v1) = pts[0], pts[1]
-        u, v = round(uv[0], 2), round(uv[1], 2)
-        if tool == 'line':
-            return [(u, v), (u1, v1)] if grab == 0 else [(u0, v0), (u, v)]
-        if tool in ('circle', 'polygon'):
-            return [(u0, v0), (u, v)] if math.hypot(u - u0, v - v0) > 1e-3 else None
-        if tool == 'circle2':
-            cu, cv = (u0 + u1) / 2, (v0 + v1) / 2
-            r, d = math.hypot(u - cu, v - cv), math.hypot(u1 - u0, v1 - v0) or 1.0
-            if r < 1e-3:
-                return None
-            dx, dy = (u1 - u0) / d, (v1 - v0) / d
-            return [(cu - r * dx, cv - r * dy), (cu + r * dx, cv + r * dy)]
-        if tool == 'ellipse':
-            sx, sy = (1 if u1 >= u0 else -1), (1 if v1 >= v0 else -1)
-            hw, hh = abs(u1 - u0), abs(v1 - v0)
-            if grab == 'u':
-                hw = abs(u - u0)
-            else:
-                hh = abs(v - v0)
-            return [(u0, v0), (u0 + sx * hw, v0 + sy * hh)] if hw > 1e-3 and hh > 1e-3 else None
-        umin, umax, vmin, vmax = self._extent(tool, pts)
-        kind, side_u, side_v = grab
-        if 'u' in kind:
-            if side_u == 'min':
-                umin = u
-            else:
-                umax = u
-        if 'v' in kind:
-            if side_v == 'min':
-                vmin = v
-            else:
-                vmax = v
-        if tool == 'centerRect':
-            cu, cv = u0, v0
-            hw = max(abs(umax - cu), abs(umin - cu)) if 'u' in kind else abs(u1 - u0)
-            hh = max(abs(vmax - cv), abs(vmin - cv)) if 'v' in kind else abs(v1 - v0)
-            if 'u' in kind:
-                hw = abs(u - cu)
-            if 'v' in kind:
-                hh = abs(v - cv)
-            sx, sy = (1 if u1 >= u0 else -1), (1 if v1 >= v0 else -1)
-            return [(cu, cv), (cu + sx * hw, cv + sy * hh)] if hw > 1e-3 and hh > 1e-3 else None
-        if abs(umax - umin) < 1e-3 or abs(vmax - vmin) < 1e-3:
-            return None
-        return [(min(umin, umax), min(vmin, vmax)), (max(umin, umax), max(vmin, vmax))]
+    def _drag_label(self, meta, x, y):
+        text = ' × '.join(sm.values(meta)[:2]) + ' mm'
+        self.dim.setText(text)
+        self.dim.adjustSize()
+        self.dim.move(int(x) + 14, int(y) + 12)
+        self.dim.show()
 
     def _sketch_hook(self, kind, x, y):
         if self.mode != 'sketch' or self.tool is not None or self.busy:
             return False
         if kind == 'press':
+            self._sk_drag = None
             hit = self.view.nearest_edge(x, y, kinds=('sketch',))
             body = self.document.get(hit[0]) if hit else None
             if body is None:
@@ -1422,48 +1340,47 @@ class StudioWindow(QMainWindow):
             self.selected = [body.id]
             self.refresh()
             self._update_grips()
-            self._sk_drag = None
             if not body.meta or body.meta.get('tool') not in self.EDITABLE:
                 self.sk_hint.setText('Zaznaczono szkic (brak wymiarów do edycji)')
                 return True
-            self.sk_hint.setText('Zaznaczono · Tab – wymiary · przeciągnij krawędź – skaluj')
+            self.sk_hint.setText('Zaznaczono · Tab – wymiary · przeciągnij uchwyt lub krawędź')
             uv = self.view.plane_point(body.plane, x, y)
             if uv is None:
                 return True
             pts = [tuple(p) for p in body.meta['points']]
             ppm = max(self.view._cam_ppm(), 1e-6)
-            self._sk_drag = dict(body=body, tool=body.meta['tool'], pts=pts, sides=body.meta.get('sides', 5),
-                                 grab=self._grab_info(body.meta['tool'], pts, uv, 14.0 / ppm), new=None)
+            self._sk_drag = dict(kind='shape', body=body, meta=body.meta, new=None,
+                                 grab=sm.grab_info(body.meta['tool'], pts, uv, 14.0 / ppm, body.meta))
             return True
         drag = getattr(self, '_sk_drag', None)
         if drag is None:
             return True
+        body = drag['body']
         if kind == 'move':
-            uv = self.view.plane_point(drag['body'].plane, x, y)
+            uv = self.view.plane_point(body.plane, x, y)
             if uv is None:
                 return True
-            new_pts = self._grab_apply(drag['tool'], drag['pts'], drag['grab'], uv)
-            if new_pts is None:
+            meta2 = sm.grab_apply(drag['meta'], drag['grab'], uv)
+            if meta2 is None:
                 return True
             try:
-                plane = drag['body'].plane
-                shape = kernel.polyline(plane, new_pts, False) if drag['tool'] == 'line' else kernel.sketch_shape(drag['tool'], plane, new_pts, drag['sides'])
+                shape = self._meta_shape(body.plane, meta2)
+                mesh = kernel.display_mesh(shape)
             except Exception:
                 return True
-            drag['new'] = (shape, new_pts)
-            self.view.set_preview_mesh(kernel.display_mesh(shape), line_color=SKETCH_ORANGE, width=2.6)
-            dims = self._dim_initial(drag['tool'], new_pts, drag['sides'])
-            self.dim.setText(' × '.join(dims[:2]) + ' mm')
-            self.dim.adjustSize()
-            self.dim.move(int(x) + 14, int(y) + 12)
-            self.dim.show()
+            drag['new'] = (shape, meta2)
+            self.override = {body.id: replace(body, shape=shape, mesh=mesh, meta=meta2)}
+            self.refresh()
+            self._update_grips(body, meta2, mesh)
+            self._drag_label(meta2, x, y)
             return True
         if kind == 'release':
             self._sk_drag = None
             self.dim.hide()
-            self.view.set_preview_mesh(None)
             if drag['new'] is not None:
-                self._commit_sketch_edit(drag['body'], drag['new'][0], drag['new'][1], drag['sides'])
+                self._commit_sketch_edit(body, drag['new'][0], drag['new'][1])
+            else:
+                self.override = {}
             return True
         return True
 

@@ -38,7 +38,7 @@ QToolButton#shapeMain:hover { background:#e9f3ff; border-color:#2f87e8; }
 QToolButton#shapeMain:checked, QToolButton#shapeMain:checked:hover { background:#2f87e8; border-color:#2f87e8; }
 QToolButton#shapeExpand { background:#fff; border:1px solid #cbd9e6; border-left:0; border-radius:8px; border-top-left-radius:0; border-bottom-left-radius:0; color:#344e69; font-size:11px; }
 QToolButton#shapeExpand:hover { background:#e9f3ff; color:#17314a; }
-QToolButton#padTool { background:#fff; border:1px solid #bdccdb; border-radius:8px; color:#344e69; font-size:18px; font-weight:600; }
+QToolButton#padTool { background:#fff; border:1px solid #bdccdb; border-radius:8px; color:#344e69; font-size:14px; font-weight:600; }
 QToolButton#padTool:hover { border-color:#187ac1; }
 QToolButton#padTool:checked { background:#2f87e8; color:#fff; border-color:#2f87e8; }
 QToolButton#cubeX, QToolButton#cubeY, QToolButton#cubeZ, QToolButton#cubeI { border:1px solid transparent; border-radius:18px; color:#fff; font-weight:700; font-size:12px; }
