@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 from PySide6.QtCore import QEvent, QObject, QPoint, QRunnable, QSize, Qt, QThreadPool, QTimer, Signal
 from PySide6.QtGui import QCursor, QIcon, QKeySequence, QMatrix4x4, QShortcut
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
                                QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QToolButton, QVBoxLayout, QWidget)
 from . import kernel
 from . import shell_ui as ui
@@ -168,6 +168,7 @@ class StudioWindow(QMainWindow):
         self.view.pointDragged.connect(self.handle_point_dragged)
         self._build_overlays()
         self.view.installEventFilter(self)
+        QApplication.instance().installEventFilter(self)
         self._timers = {}
         for name, slot in (('extrude', self.update_extrude_preview), ('mod', self.update_mod_preview), ('bool', self.update_bool_preview),
                            ('mirror', self.update_mirror_preview), ('transform', self.update_transform_preview), ('dim', self.update_dim_preview),
@@ -623,6 +624,13 @@ class StudioWindow(QMainWindow):
             w.raise_()
 
     def eventFilter(self, obj, event):
+        if event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Return, Qt.Key_Enter) and self.isActiveWindow() and not self.busy:
+            action = {'extrude': self.apply_extrude, 'bool': self.apply_bool, 'mod': self.apply_mod, 'mirror': self.apply_mirror,
+                      'move': self.apply_transform, 'rotate': self.apply_transform}.get(self.mode)
+            focus = QApplication.focusWidget()
+            if action and not isinstance(focus, QPlainTextEdit) and (focus is None or self.isAncestorOf(focus) or focus is self):
+                action()
+                return True
         if obj is self.view and event.type() == QEvent.Resize:
             self._layout_overlays()
         return super().eventFilter(obj, event)
@@ -753,6 +761,9 @@ class StudioWindow(QMainWindow):
         elif mode == 'mod':
             self.mod_panel.show()
             self.view.edge_mode = True
+            self.mod_size.blockSignals(True)
+            self.mod_size.setValue(2.0)
+            self.mod_size.blockSignals(False)
             self._mod_kind_changed()
             self.update_mod_status()
             self.hint('Edytuj bryłę: kliknij krawędź. Shift + klik dodaje kolejne.')
@@ -1340,6 +1351,10 @@ class StudioWindow(QMainWindow):
         self._hover_key = None
         if not shift:
             self._ex_op_manual = False
+            for spin in (self.ex_value, self.ex_second):
+                spin.blockSignals(True)
+                spin.setValue(10.0)
+                spin.blockSignals(False)
         self._auto_extrude_op()
         if not self.ex_profiles:
             self.view.set_selection_meshes(None)
@@ -1403,9 +1418,7 @@ class StudioWindow(QMainWindow):
             inside = touching and any(kernel.point_state(b.shape, sample) == 'in' for b in solids)
         except Exception:
             return
-        if not touching:
-            return
-        want = 'cut' if inside else 'join'
+        want = 'new' if not touching else ('cut' if inside else 'join')
         if self.ex_op.currentData() != want:
             self._ex_auto = True
             try:
@@ -1624,6 +1637,10 @@ class StudioWindow(QMainWindow):
             return
         ids = set(kernel.edge_chain(body.shape, index)) if ctrl else {index}
         if not (shift or ctrl) or bid not in self.edges:
+            if not any(self.edges.values()):
+                self.mod_size.blockSignals(True)
+                self.mod_size.setValue(2.0)
+                self.mod_size.blockSignals(False)
             self.edges = {bid: set()}
         current = self.edges[bid]
         if (shift or ctrl) and ids <= current:
@@ -2269,6 +2286,7 @@ class StudioWindow(QMainWindow):
             event.ignore()
             return
         if not self.document.dirty:
+            QApplication.instance().removeEventFilter(self)
             event.accept()
             return
         answer = QMessageBox.question(self, 'Niezapisane zmiany', 'Projekt ma niezapisane zmiany. Zapisać przed zamknięciem?',

@@ -269,6 +269,11 @@ class StudioTests(unittest.TestCase):
             from PySide6.QtGui import QCloseEvent
             ev=QCloseEvent();w.closeEvent(ev);self.assertFalse(ev.isAccepted())
 
+    def test_defaults_and_auto_new_body(self):
+        w=self.w;self.sketch('rect',(0,0),(10,10));w.set_mode('extrude');self.pick_sketch_profile(w.document.bodies[0])
+        self.assertEqual(w.ex_value.value(),10);self.assertEqual(w.ex_op.currentData(),'new')
+        w.set_mode('mod');self.assertEqual(w.mod_size.value(),2)
+
     def test_cube_button_picks_sketch_plane_and_grid_adapts(self):
         w=self.w;w.set_mode('plane');w._cube_clicked('X');self.assertEqual((w.mode,w.sketch_plane),('sketch','YZ'))
         w.view.opts['distance']=400;w.view.update();far=w.view._grid_key[0]
