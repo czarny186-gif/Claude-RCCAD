@@ -1228,7 +1228,7 @@ class StudioWindow(QMainWindow):
         if cached and cached[0] == sig:
             return cached[1]
         try:
-            faces = kernel.regions(plane, [e for b in bodies for e in b.shape.Edges()])
+            faces = kernel.regions(plane, [e for b in bodies for e in b.shape.Edges()], [b.shape for b in bodies if b.shape.IsClosed()])
         except Exception:
             faces = [f for f in (profile_face(b.shape) for b in bodies if b.shape.IsClosed()) if f is not None]
         self._region_cache[key] = (sig, faces)

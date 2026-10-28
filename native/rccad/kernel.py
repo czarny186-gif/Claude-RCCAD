@@ -700,7 +700,7 @@ def split_edges(edges):
     return out
 
 
-def regions(plane, edges):
+def regions(plane, edges, wires=()):
     """Wszystkie obszary ograniczone krawędziami szkiców (jak 'region' w HTML): nakładające się kształty tną się nawzajem."""
     from OCP.BOPAlgo import BOPAlgo_BuilderFace
     from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
@@ -717,18 +717,47 @@ def regions(plane, edges):
     face = BRepBuilderAPI_MakeFace(pln, -1e4, 1e4, -1e4, 1e4).Face()
     builder = BOPAlgo_BuilderFace()
     builder.SetFace(face)
-    builder.SetShapes(_tolist([p.wrapped for p in unique]))
+    both = [p.wrapped for p in unique] + [p.wrapped.Reversed() for p in unique]   # każda krawędź graniczy z dwoma obszarami
+    builder.SetShapes(_tolist(both))
     builder.Perform()
-    if builder.HasErrors():
-        raise CadError("Nie udało się wyznaczyć obszarów szkicu.")
     out = []
-    for shape in _fromlist(builder.Areas()):
+    for shape in ([] if builder.HasErrors() else _fromlist(builder.Areas())):
         f = cq.Shape.cast(shape)
         try:
             if 1e-6 < f.Area() < 1e7 and f.outerWire().IsClosed():
                 out.append(f)
         except Exception:
             continue
+    try:
+        alt = _regions_from_wires(wires)
+    except Exception:
+        alt = []
+    return alt if len(alt) > len(out) else out
+
+
+def _regions_from_wires(wires):
+    """Obszary z zamkniętych konturów: ściany tną się nawzajem (General Fuse), więc część wspólna i reszty są osobnymi obszarami."""
+    from OCP.BOPAlgo import BOPAlgo_Builder
+    faces = []
+    for w in wires:
+        if w.IsClosed():
+            try:
+                faces.append(cq.Face.makeFromWires(w))
+            except Exception:
+                pass
+    if not faces:
+        return []
+    builder = BOPAlgo_Builder()
+    for f in faces:
+        builder.AddArgument(f.wrapped)
+    builder.SetRunParallel(False)
+    builder.Perform()
+    if builder.HasErrors():
+        return []
+    out = []
+    for f in cq.Shape.cast(builder.Shape()).Faces():
+        if f.Area() > 1e-6 and not any(f.isSame(q) for q in out):
+            out.append(f)
     return out
 
 
