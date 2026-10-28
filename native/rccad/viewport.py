@@ -234,6 +234,7 @@ class CadView(gl.GLViewWidget):
         self.snap_label = None
         self.sketch_centers = []
         self.snap_marker = None       # ((x, y), etykieta) - przyciąganie jak w wersji HTML
+        self.hover_gate = None        # funkcja () -> bool: czy w ogóle liczyć kursor szkicu (Studio włącza po pierwszym kliknięciu)
         self.snapper = None           # funkcja (x, y, (u, v)) -> (u, v, etykieta) ustawiana przez Studio
         self._body_m = {}             # id bryły -> macierz podglądu przesunięcia / obrotu (bez ponownego liczenia geometrii)
         self._cache = {}              # id bryły -> (klucz, elementy GL): bez przebudowy całej sceny przy każdej zmianie
@@ -805,6 +806,11 @@ class CadView(gl.GLViewWidget):
         try:
             if self.click_mode and not self.plane_pick:
                 if self.sketch_plane and self.sketch_tool:
+                    if self.hover_gate is not None and not self.hover_gate():
+                        if self.snap_marker is not None:
+                            self.snap_marker = None
+                            self.overlay.update()
+                        return
                     point = self.plane_point(self.sketch_plane, pos.x(), pos.y())
                     if point:
                         u, v = self._snap(point, pos=pos)

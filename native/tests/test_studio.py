@@ -244,6 +244,35 @@ class StudioTests(unittest.TestCase):
         w=self.w;a,b=self.make_solids();w.selected=[a.id];w.set_mode('rotate');w.t_spins[0].setValue(30)
         self.assertIsNotNone(w.view._body_m.get(a.id));w.set_mode(None);self.assertNotIn(a.id,w.view._body_m)
 
+    def test_trimmed_union_outline_is_one_extrudable_region(self):
+        w=self.w;self.sketch('rect',(0,0),(10,10));self.sketch('rect',(5,0),(15,10));w.choose_tool('trim')
+        for which,(x,y) in ((0,(10,5)),(-1,(5,5))):
+            n=len(w.document.bodies);bi=which if which>=0 else n-1;body=w.document.bodies[bi]
+            pieces=k.trim_pieces([b.shape.Edges() for b in w.document.bodies],bi)
+            idx=min(range(len(pieces)),key=lambda i:(pieces[i].Center().x-x)**2+(pieces[i].Center().y-y)**2)
+            with patch.object(w,'_trim_target',return_value=(body,pieces,idx)):w.sketch_clicked('XY',0,0)
+            self.wait()
+        plane,bodies=w._drawn_sketches()['XY'];faces=w._regions_for('XY',plane,bodies)
+        self.assertTrue(any(abs(f.Area()-150)<1e-3 for f in faces),[round(f.Area(),2) for f in faces])
+        big=[f for f in faces if abs(f.Area()-150)<1e-3][0]
+        w.set_mode('extrude');src=dict(kind='region',id=None,face=big,wire=big.outerWire(),plane='XY',normal=(0,0,1),center=big.Center().toTuple())
+        with patch.object(w,'_profile_at',return_value=src):w.view_clicked(5,5,False,False)
+        w.ex_value.setValue(3);w.apply_extrude();self.wait()
+        self.assertAlmostEqual([b for b in w.document.bodies if b.kind=='solid'][0].shape.Volume(),450,2)
+
+    def test_escape_and_right_click_keep_line_and_leave_drawing(self):
+        w=self.w;w.set_mode('plane');w.plane_picked('XY');w.choose_tool('line')
+        for p in ((0,0),(10,0),(10,10)):w.sketch_clicked('XY',*p)
+        w.keyPressEvent(QKeyEvent(QEvent.KeyPress,Qt.Key_Escape,Qt.NoModifier));self.wait()
+        self.assertEqual(len(w.document.bodies),1);self.assertEqual(w.points,[]);self.assertEqual(w.mode,'sketch')
+        for p in ((20,0),(30,0)):w.sketch_clicked('XY',*p)
+        w.context_menu(5,5);self.wait();self.assertEqual(len(w.document.bodies),2)
+        w.sketch_clicked('XY',40,0);w.context_menu(5,5);self.assertEqual(len(w.document.bodies),2)
+
+    def test_hover_cursor_only_after_first_click(self):
+        w=self.w;w.set_mode('plane');w.plane_picked('XY');w.choose_tool('rect');self.assertFalse(w.sketch_hover_wanted())
+        w.sketch_clicked('XY',0,0);self.assertTrue(w.sketch_hover_wanted())
+
     def test_svg_import(self):
         import tempfile
         with tempfile.TemporaryDirectory() as d:

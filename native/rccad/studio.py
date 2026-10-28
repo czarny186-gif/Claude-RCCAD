@@ -679,6 +679,7 @@ class StudioWindow(QMainWindow):
         self.view.clear_body_matrices()
         self.cancel_previews()
         self.view.snapper = None
+        self.view.hover_gate = None
         self.mode = mode
         self.points = []
         self.tangent_lines = []
@@ -804,6 +805,7 @@ class StudioWindow(QMainWindow):
         self.view.plane_pick = False
         self.view.sketch_plane = plane
         self.view.snapper = self._snapper
+        self.view.hover_gate = self.sketch_hover_wanted
         self.view.show_planes(False)
         self.view.set_preview_mesh(None)
         self.view.look_along(plane)
@@ -1274,8 +1276,8 @@ class StudioWindow(QMainWindow):
     def pick_profile(self, x, y, shift=False):
         try:
             src = self._profile_at(x, y)
-        except kernel.CadError as exc:
-            self.toast(str(exc))
+        except Exception as exc:
+            self.toast(str(exc) or 'Nie udało się wybrać profilu.')
             return
         if src is None:
             self.toast('Kliknij zamknięty profil szkicu albo płaską ścianę bryły.')
@@ -1359,6 +1361,7 @@ class StudioWindow(QMainWindow):
             if error:
                 self.view.set_preview_mesh(None)
                 self.ex_status.setText(error)
+                self.toast(error)
                 return
             red = op == 'cut'
             color = (.9, .2, .2, .7) if red else ((.3, .75, .5, .72) if op == 'intersect' else PREVIEW_BLUE)
@@ -1926,8 +1929,31 @@ class StudioWindow(QMainWindow):
 
         self.run_operation('Wklejanie', build, apply)
 
+    def end_current_shape(self):
+        """Prawy przycisk / Esc w trakcie rysowania: linia zostaje (jeśli ma ≥ 2 punkty) i rysowanie linii się kończy; inne kształty są porzucane."""
+        if self.tool == 'line' and len(self.points) >= 2:
+            self.finish_line()
+            return
+        self.points = []
+        self.tangent_lines = []
+        self.dim.hide()
+        self.dim_panel.hide()
+        self.view.set_preview_mesh(None)
+        self.view.set_marker(None)
+        self.show_sketch_hint()
+
+    def sketch_hover_wanted(self):
+        """Kursor ze znacznikiem i przyciąganiem działa dopiero po wybraniu miejsca rysowania (pierwszy klik) — bez ciągłego liczenia."""
+        return bool(self.points) or self.tool == 'trim' or (self.tool == 'circleTangent2' and len(self.tangent_lines) == 2)
+
     def context_menu(self, x, y):
-        if self.busy or self.mode is not None:
+        if self.busy:
+            return
+        if self.mode == 'sketch':
+            if self.points or self.tangent_lines:
+                self.end_current_shape()
+            return
+        if self.mode is not None:
             return
         bid = self.pick_object(x, y)
         if bid and bid not in self.selected:
@@ -2062,11 +2088,7 @@ class StudioWindow(QMainWindow):
                 self.dim_panel.hide()
                 self.view.setFocus()
             elif self.mode == 'sketch' and (self.points or self.tangent_lines):
-                self.points = []
-                self.tangent_lines = []
-                self.dim.hide()
-                self.view.set_preview_mesh(None)
-                self.show_sketch_hint()
+                self.end_current_shape()
             elif self.mode == 'sketch' and self.tool == 'text':
                 self.choose_tool('rect')
             elif self.mode is not None:
