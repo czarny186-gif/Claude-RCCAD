@@ -1814,6 +1814,8 @@ class StudioWindow(QMainWindow):
             color = (.9, .2, .2, .7) if red else ((.3, .75, .5, .72) if op == 'intersect' else PREVIEW_BLUE)
             self.view.set_preview_mesh(mesh, color=color, line_color=(.56, .07, .07, 1) if red else (.14, .3, .45, 1), width=2)
             self.ex_status.setText(f'Wybrano profili: {len(self.ex_profiles)}.')
+            if self._hv is not None:
+                self._stretch_extrude()
 
         self.run_preview('extrude', compute, show)
         if self._hv is None:

@@ -268,9 +268,11 @@ class Overlay2D(QWidget):
 class OverMesh(gl.GLMeshItem):
     """Półprzezroczysta nakładka na ścianę: przesunięta ku kamerze, więc nie ginie w z-fightingu z bryłą."""
 
+    offset = -2.0
+
     def paint(self):
         GL.glEnable(GL.GL_POLYGON_OFFSET_FILL)
-        GL.glPolygonOffset(-2.0, -2.0)
+        GL.glPolygonOffset(self.offset, self.offset)
         try:
             super().paint()
         finally:
@@ -577,15 +579,16 @@ class CadView(gl.GLViewWidget):
     def _build_planes(self):
         """Płaszczyzny podstawowe jak punkt początkowy w Fusion 360: trzy brzoskwiniowe, półprzezroczyste kwadraty wychodzące z początku układu."""
         corners = {
-            'XY': [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)],
+            'XY': [(0, 0, 0), (1, 0, 0), (1, -1, 0), (0, -1, 0)],
             'XZ': [(0, 0, 0), (1, 0, 0), (1, 0, 1), (0, 0, 1)],
-            'YZ': [(0, 0, 0), (0, 1, 0), (0, 1, 1), (0, 0, 1)],
+            'YZ': [(0, 0, 0), (0, -1, 0), (0, -1, 1), (0, 0, 1)],
         }
         self._plane_corners = corners
         for name, pts in corners.items():
             rgb = (.96, .62, .40)
-            fill = gl.GLMeshItem(vertexes=np.array(pts, dtype=np.float32), faces=np.array([[0, 1, 2], [0, 2, 3]]),
-                                 color=(*rgb, .22), smooth=False, drawEdges=False)
+            fill = OverMesh(vertexes=np.array(pts, dtype=np.float32), faces=np.array([[0, 1, 2], [0, 2, 3]]),
+                            color=(*rgb, .22), smooth=False, drawEdges=False)
+            fill.offset = -1.0
             fill.setGLOptions('translucent')
             outline = gl.GLLinePlotItem(pos=np.array([*pts, pts[0]], dtype=np.float32), color=(.88, .50, .26, .95), width=1.6, antialias=True)
             label = gl.GLTextItem(pos=np.array(pts[2], dtype=np.float32) * .85, text=name, color=QColor('#b8672f'))
@@ -659,7 +662,8 @@ class CadView(gl.GLViewWidget):
             if hit:
                 p = np.asarray(hit[1], float)
                 eps = .03 * self._plane_half
-                if np.all(p >= -eps) and np.all(p <= self._plane_half + eps) and (best is None or hit[0] < best[0]):
+                h = self._plane_half
+                if (-eps <= p[0] <= h + eps and -h - eps <= p[1] <= eps and -eps <= p[2] <= h + eps) and (best is None or hit[0] < best[0]):
                     best = (hit[0], name)
         return best[1] if best else None
 
@@ -777,6 +781,7 @@ class CadView(gl.GLViewWidget):
                 continue
             if len(mesh.triangles):
                 item = OverMesh(vertexes=mesh.vertices, faces=mesh.triangles, smooth=False, color=color, drawEdges=False)
+                item.offset = -4.0
                 item.setGLOptions('translucent')
                 self.addItem(item)
                 self.selection_items.append(item)
@@ -1038,7 +1043,8 @@ class CadView(gl.GLViewWidget):
         self.custom_plane_items = []
         if frame is not None:
             pts = np.array([kernel.to_world(frame, u, v) for u, v in ((-half, -half), (half, -half), (half, half), (-half, half))], dtype=np.float32)
-            fill = gl.GLMeshItem(vertexes=pts, faces=np.array([[0, 1, 2], [0, 2, 3]]), color=(*color, .14), smooth=False, drawEdges=False)
+            fill = OverMesh(vertexes=pts, faces=np.array([[0, 1, 2], [0, 2, 3]]), color=(*color, .14), smooth=False, drawEdges=False)
+            fill.offset = -1.0
             fill.setGLOptions('translucent')
             outline = gl.GLLinePlotItem(pos=np.array([*pts, pts[0]], dtype=np.float32), color=(*color, .9), width=2, antialias=True)
             for item in (fill, outline):

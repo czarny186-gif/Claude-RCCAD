@@ -258,7 +258,7 @@ class StudioTests(unittest.TestCase):
 
     def test_idle_planes_axes_close_prompt_and_reverse_arrow(self):
         w=self.w;w.set_mode(None);w.view.set_view('iso');self.app.processEvents()
-        xy=w.view.project_one((.5,.5,0));name=w.view.plane_at(*xy);self.assertIn(name,('XY','XZ','YZ'))
+        xy=w.view.project_one((.5,-.5,0));name=w.view.plane_at(*xy);self.assertIn(name,('XY','XZ','YZ'))
         w.view_clicked(xy[0],xy[1],False,False);self.assertEqual((w.mode,w.sketch_plane),('sketch',name))
         w.set_mode(None);w.view.set_view('Z');w.view.update();self.assertFalse(w.view.axis_lines[4][0].visible())
         w.view.set_view('iso');w.view.update();self.assertTrue(w.view.axis_lines[4][0].visible())
@@ -308,7 +308,7 @@ class StudioTests(unittest.TestCase):
 
     def test_fusion_planes_axes_and_remembered_sketch_plane(self):
         w=self.w;v=w.view;v.show_planes(True);self.assertTrue(v._origin_visible)
-        xy=v.project_one((2,2,0));self.assertEqual(v.plane_at(*xy) in ('XY','XZ','YZ'),True)
+        xy=v.project_one((2,-2,0));self.assertEqual(v.plane_at(*xy) in ('XY','XZ','YZ'),True)
         xn=v.project_one((-5,-5,0));self.assertIsNone(v.plane_at(*xn))
         self.sketch('rect',(0,0),(5,5));w.set_mode(None)
         w.toggle_mode('sketch');self.assertEqual((w.mode,w.sketch_plane),('sketch','XY'))
