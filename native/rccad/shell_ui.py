@@ -390,3 +390,45 @@ class RichMenu(QFrame):
         self.adjustSize()
         self.move(global_pos)
         self.show()
+
+
+class StepRow(QFrame):
+    """Graficzny krok kreatora (np. lustro): numer / ptaszek, ikona, tytuł i wartość. Stany: pending, active, done."""
+
+    def __init__(self, number, icon_kind, title):
+        super().__init__()
+        self.number = number
+        self.icon_kind = icon_kind
+        self.setObjectName('step')
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(10, 8, 12, 8)
+        lay.setSpacing(10)
+        self.mark = QLabel()
+        self.mark.setFixedSize(26, 26)
+        self.mark.setAlignment(Qt.AlignCenter)
+        lay.addWidget(self.mark)
+        self.pic = QLabel()
+        self.pic.setFixedSize(34, 34)
+        lay.addWidget(self.pic)
+        col = QVBoxLayout()
+        col.setSpacing(0)
+        self.title = QLabel(title)
+        self.title.setStyleSheet('font-weight:700;color:#27415a;')
+        self.value = QLabel('')
+        self.value.setStyleSheet('color:#6c869b;')
+        col.addWidget(self.title)
+        col.addWidget(self.value)
+        lay.addLayout(col, 1)
+        self.set_state('pending', '')
+
+    def set_state(self, state, value):
+        colors = {'pending': ('#f3f6fa', '#d6e0ea', '#9fb2c4'), 'active': ('#fff6e8', '#f09a22', '#f09a22'), 'done': ('#eaf8f1', '#2fa56d', '#2fa56d')}
+        bg, border, accent = colors[state]
+        self.setStyleSheet(f'QFrame#step{{background:{bg};border:1.6px solid {border};border-radius:10px;}}')
+        self.mark.setStyleSheet(f'background:{accent};color:white;border-radius:13px;font-weight:800;border:none;')
+        self.mark.setText('✓' if state == 'done' else str(self.number))
+        self.pic.setStyleSheet('border:none;background:transparent;')
+        self.pic.setPixmap(icons.badge(self.icon_kind, accent, 34))
+        self.value.setText(value)
+        self.value.setStyleSheet('color:#6c869b;border:none;')
+        self.title.setStyleSheet('font-weight:700;color:#27415a;border:none;')

@@ -174,7 +174,7 @@ class StudioWindow(QMainWindow):
                            ('gizmo', self._place_gizmo)):
             timer = QTimer(self)
             timer.setSingleShot(True)
-            timer.setInterval(40)
+            timer.setInterval(16 if name == 'extrude' else 40)
             timer.timeout.connect(slot)
             self._timers[name] = timer
         for seq, fn in (('Ctrl+Z', self.undo), ('Ctrl+Y', self.redo), ('Ctrl+Shift+Z', self.redo), ('Ctrl+S', self.save_project),
@@ -478,7 +478,6 @@ class StudioWindow(QMainWindow):
         self._field(lay, 'Operacja', self.ex_op)
         self.ex_dir = ui.Segmented([('Jedna strona', 'one', 'one'), ('Symetrycznie', 'symmetric', 'sym'), ('Dwie strony', 'two', 'two')], 32)
         self._field(lay, 'Kierunek', self.ex_dir)
-        lay.addWidget(_label('Shift + klik: wybierz kilka profili. Enter zatwierdza operację.', 'small'))
         self.ex_status = _label('Kliknij zamknięty profil szkicu lub płaską ścianę bryły.', 'status')
         lay.addWidget(self.ex_status)
         self.ex_bar = QFrame(self.view)
@@ -520,8 +519,6 @@ class StudioWindow(QMainWindow):
         lay.addWidget(self.bool_status)
         self.bool_keep = QCheckBox('Zachowaj bryły-narzędzia')
         lay.addWidget(self.bool_keep)
-        lay.addWidget(_label('Kliknij bryłę bazową (niebieska), potem jedną lub więcej brył-narzędzi (pomarańczowe). Ponowne kliknięcie odznacza. '
-                             'Enter zatwierdza. Cofanie i ponawianie: strzałki w prawym górnym rogu (Ctrl+Z / Ctrl+Y).', 'small'))
         self._buttons(lay, 'Zastosuj', 'Anuluj', self.apply_bool, lambda: self.set_mode(None))
         self.bool_op.currentIndexChanged.connect(lambda *_: self._timers['bool'].start())
 
@@ -535,24 +532,21 @@ class StudioWindow(QMainWindow):
         lay.addWidget(self.mod_size)
         self.mod_status = _label('Kliknij krawędź (lub kilka krawędzi) bryły.', 'status')
         lay.addWidget(self.mod_status)
-        lay.addWidget(_label('Kliknij jedną krawędź. Shift + klik dodaje lub usuwa kolejne krawędzie, Ctrl + klik zaznacza cały łańcuch styczny. '
-                             'Rozmiar zmieniaj strzałką lub wpisując wartość. Zielony podgląd = dodaje materiał, pomarańczowy = usuwa. '
-                             'Enter zatwierdza. Cofanie i ponawianie: strzałki w prawym górnym rogu (Ctrl+Z / Ctrl+Y).', 'small'))
         self._buttons(lay, 'Zastosuj', 'Zamknij', self.apply_mod, lambda: self.set_mode(None))
         self.mod_size.valueChanged.connect(lambda *_: self._mod_value_changed())
         self.mod_kind.currentIndexChanged.connect(self._mod_kind_changed)
 
         # --- odbicie lustrzane ---
         self.mir_panel, lay = self._panel(312, 'Odbicie lustrzane', 'mirror', 'Obiekt → ściana-lustro', icons_green)
-        self.mir_status = _label('', 'status')
-        lay.addWidget(self.mir_status)
+        self.mir_step1 = ui.StepRow(1, 'mirror', 'Obiekt do odbicia')
+        self.mir_step2 = ui.StepRow(2, 'sym', 'Ściana-lustro')
+        lay.addWidget(self.mir_step1)
+        lay.addWidget(self.mir_step2)
         self.mir_keep = QCheckBox('Zachowaj oryginał (kopia)')
         self.mir_keep.setChecked(True)
         lay.addWidget(self.mir_keep)
         self.mir_join = QCheckBox('Połącz z oryginałem w jedną bryłę')
         lay.addWidget(self.mir_join)
-        lay.addWidget(_label('1. Kliknij bryłę (lub element szkicu), którą chcesz odbić. 2. Kliknij ścianę, względem której ma nastąpić odbicie — '
-                             'odbicie powstanie po drugiej stronie tej ściany. Enter zatwierdza, Esc zamyka.', 'small'))
         reset = QPushButton('Zmień obiekt')
         reset.clicked.connect(lambda _=False: self.reset_mirror())
         lay.addWidget(reset)
@@ -585,7 +579,6 @@ class StudioWindow(QMainWindow):
         for label, key in (('Do lewej', 'left'), ('Do środka', 'center'), ('Do prawej', 'right')):
             self.text_align.addItem(label, key)
         self._field(lay, 'Wyrównanie względem klikniętego punktu', self.text_align)
-        lay.addWidget(_label('Kliknij miejsce na szkicu, aby wstawić tekst. Tekst można potem wyciągnąć lub wyciąć jak każdy profil. Esc zamyka narzędzie.', 'small'))
         close = QPushButton('Zamknij narzędzie')
         close.clicked.connect(lambda _=False: self.choose_tool('rect'))
         lay.addWidget(close)
@@ -641,7 +634,7 @@ class StudioWindow(QMainWindow):
     # komunikaty
     # =====================================================================
     def hint(self, text):
-        self.toast(text, 6000)
+        pass  # podpowiedzi przeniesione do samouczka (Plik → Pomoc)
 
     def toast(self, text, ms=4500):
         self.notice.setText(text)
@@ -713,6 +706,7 @@ class StudioWindow(QMainWindow):
         self.dim.hide()
         self.dim_panel.hide()
         self.view.set_preview_mesh(None)
+        self.view.set_selection_meshes(None)
         self.view.set_handles([])
         self.view.set_marker(None)
         self.view.sketch_plane = None
@@ -1179,12 +1173,28 @@ class StudioWindow(QMainWindow):
                     self._hover_key = key
                     self.view.set_preview_mesh(kernel.display_mesh(face) if face is not None else None,
                                                color=(1, .55, .1, .35), line_color=SKETCH_ORANGE, width=2)
+            elif self.mode == 'mirror' and self.mirror_id and self.mirror_frame is None:
+                self._hover_face_only(x, y)
             elif self.mode == 'mod':
                 self.view._set_hover_edge(self.view.nearest_edge(x, y))
             elif self.mode == 'extrude' and not self.ex_profiles:
                 self._hover_extrude(x, y)
         except Exception:
             self._hover_key = None
+
+    def _hover_face_only(self, x, y):
+        hit = self.view.pick_face(x, y)
+        body = self.document.get(hit[0]) if hit else None
+        face = None
+        if body is not None and body.kind == 'solid':
+            try:
+                face, _ = kernel.face_at(body.shape, hit[1], hit[2])
+            except kernel.CadError:
+                face = None
+        key = ('mf', face.hashCode()) if face is not None else None
+        if key != self._hover_key:
+            self._hover_key = key
+            self.view.set_preview_mesh(kernel.display_mesh(face) if face is not None else None, color=(1, .55, .1, .35), line_color=SKETCH_ORANGE, width=2)
 
     def _hover_extrude(self, x, y):
         blue = dict(color=(.35, .65, .94, .45), line_color=(.1, .3, .6, 1), width=2)
@@ -1319,16 +1329,28 @@ class StudioWindow(QMainWindow):
             self.ex_profiles = [src]
         self._hover_key = None
         if not self.ex_profiles:
+            self.view.set_selection_meshes(None)
             self.ex_bar.hide()
             self.view.set_preview_mesh(None)
             self.view.set_handles([])
             return
+        self._mark_profiles()
         self.ex_bar.show()
         self.ex_status.setText(f'Wybrano profili: {len(self.ex_profiles)}. Przeciągnij strzałkę albo wpisz odległość u góry.')
         self.hint('Przeciągnij pomarańczową strzałkę lub wpisz odległość, potem Zastosuj (Enter).')
         self.ex_value.setFocus()
         self._layout_overlays()
         self.update_extrude_preview()
+
+    def _mark_profiles(self):
+        meshes = []
+        for src in self.ex_profiles:
+            try:
+                face = src.get('face') or profile_face(src['wire'])
+                meshes.append(kernel.display_mesh(face) if face is not None else None)
+            except Exception:
+                pass
+        self.view.set_selection_meshes(meshes)
 
     def _ex_dir_changed(self, *_):
         two = self.ex_dir.currentData() == 'two'
@@ -1381,6 +1403,7 @@ class StudioWindow(QMainWindow):
             return
         makers = self._make_tools()
         op = self.ex_op.currentData()
+        value_now = self.ex_value.value()
 
         def compute():
             return _merge_meshes([kernel.display_mesh(make(), PREVIEW_TOL) for make in makers])
@@ -1393,6 +1416,7 @@ class StudioWindow(QMainWindow):
                 self.ex_status.setText(error)
                 self.toast(error)
                 return
+            self._ex_mesh_value = value_now
             red = op == 'cut'
             color = (.9, .2, .2, .7) if red else ((.3, .75, .5, .72) if op == 'intersect' else PREVIEW_BLUE)
             self.view.set_preview_mesh(mesh, color=color, line_color=(.56, .07, .07, 1) if red else (.14, .3, .45, 1), width=2)
@@ -1650,17 +1674,20 @@ class StudioWindow(QMainWindow):
             self.toast(str(exc))
             return
         self.mirror_frame = (tuple(float(c) for c in normal), tuple(float(c) for c in face.Center().toTuple()))
+        self.view.set_selection_meshes([kernel.display_mesh(face)], color=(.25, .75, .45, .55), line_color=(.1, .55, .3, 1))
         self.update_mirror_status()
 
     def update_mirror_status(self):
         body = self.document.get(self.mirror_id) if self.mirror_id else None
         if body is None:
-            text = '1. Kliknij obiekt do odbicia.'
+            self.mir_step1.set_state('active', 'Kliknij bryłę lub szkic')
+            self.mir_step2.set_state('pending', 'Najpierw wybierz obiekt')
         elif self.mirror_frame is None:
-            text = f'Obiekt: {body.name}\n2. Kliknij ścianę jako płaszczyznę odbicia.'
+            self.mir_step1.set_state('done', body.name)
+            self.mir_step2.set_state('active', 'Kliknij ścianę bryły')
         else:
-            text = f'Obiekt: {body.name}\nŚciana: wskazana.'
-        self.mir_status.setText(text)
+            self.mir_step1.set_state('done', body.name)
+            self.mir_step2.set_state('done', 'Wskazana')
         self.mir_join.setEnabled(body is not None and body.kind == 'solid')
         self.refresh()
         self._timers['mirror'].start()
@@ -1790,6 +1817,7 @@ class StudioWindow(QMainWindow):
             if self._hv is None:
                 self._hv = self.ex_value.value()
             self.ex_value.setValue(round(self._hv + delta, 1))
+            self._stretch_extrude()
         elif hid == 'ex2':
             if self._hv is None:
                 self._hv = self.ex_second.value()
@@ -1804,6 +1832,16 @@ class StudioWindow(QMainWindow):
                 self._hv = (hid, self.t_spins[index].value())
             value = self._hv[1] + (delta if self.mode == 'move' else math.degrees(delta / max(self.t_radius, 1e-6)))
             self.t_spins[index].setValue(round(value, 1))
+
+    def _stretch_extrude(self):
+        """Natychmiastowa reakcja podglądu na przeciąganie strzałki (jednostronne wyciągnięcie jednego profilu)."""
+        base = getattr(self, '_ex_mesh_value', 0.0)
+        if len(self.ex_profiles) != 1 or self.ex_dir.currentData() != 'one' or abs(base) < 1e-6:
+            return
+        factor = self.ex_value.value() / base
+        if factor > .02:
+            src = self.ex_profiles[0]
+            self.view.stretch_preview(src['center'], src['normal'], factor)
 
     def handle_released(self, hid):
         self._hv = None
@@ -2032,11 +2070,17 @@ class StudioWindow(QMainWindow):
                    (px('f_saveas'), 'Zapisz jako…', 'Zapis pod nową nazwą', lambda: self.save_project(True)),
                    None,
                    (px('f_import'), 'Importuj…', 'STEP · STL · BREP · DXF · SVG', self.import_model),
-                   (px('f_export'), 'Eksportuj…', 'STEP · STL · BREP · DXF', self.export_model)]
+                   (px('f_export'), 'Eksportuj…', 'STEP · STL · BREP · DXF', self.export_model),
+                   None,
+                   (px('f_help'), 'Pomoc', 'Samouczek: jak korzystać z programu', self.show_help)]
         menu = ui.RichMenu(self, entries, 'Plik', 330)
         self._popup = menu
         button = self.tools['file']
         menu.popup_at(button.mapToGlobal(QPoint(0, button.height() + 10)))
+
+    def show_help(self):
+        from .help import HelpDialog
+        HelpDialog(self).exec()
 
     def confirm_discard(self):
         if self.busy:

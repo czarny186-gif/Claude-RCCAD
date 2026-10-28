@@ -167,7 +167,7 @@ class Overlay2D(QWidget):
             p.setPen(QColor('#ffffff'))
             p.drawText(QRectF(xy[0] - r, xy[1] - r, 2 * r, 2 * r), Qt.AlignCenter, label)
 
-    def _draw_axis(self, p, v, h, hot):
+    def _draw_axis(self, p, v, h, hot, big=False):
         geo = v.handle_geometry(h)
         if geo is None:
             return
@@ -175,13 +175,13 @@ class Overlay2D(QWidget):
         dx, dy = e[0] - s[0], e[1] - s[1]
         length = math.hypot(dx, dy) or 1.0
         ux, uy = dx / length, dy / length
-        head = 17 if not hot else 20
+        head = (24 if big else 17) + (3 if hot else 0)
         base = (e[0] - ux * head * .7, e[1] - uy * head * .7)
-        halo = QPen(QColor(255, 255, 255, 200), 8.5)
+        halo = QPen(QColor(255, 255, 255, 200), 10.5 if big else 8.5)
         halo.setCapStyle(Qt.RoundCap)
         p.setPen(halo)
         p.drawLine(QPointF(*s), QPointF(*base))
-        pen = QPen(self._qc(h['color']), 4.6 if not hot else 6)
+        pen = QPen(self._qc(h['color']), (6 if big else 4.6) + (1.4 if hot else 0))
         pen.setCapStyle(Qt.RoundCap)
         p.setPen(pen)
         p.drawLine(QPointF(*s), QPointF(*base))
@@ -199,6 +199,9 @@ class Overlay2D(QWidget):
             p.drawText(QPointF(e[0] + ux * 12 - 4, e[1] + uy * 12 + 5), h['label'])
 
     def _draw_arrow(self, p, v, h, hot):
+        return self._draw_axis(p, v, dict(h, label=h.get('label') if h.get('label') not in ('+', '-') else None), hot, big=True)
+
+    def _draw_arrow_old(self, p, v, h, hot):
         geo = v.handle_geometry(h)
         if geo is None:
             return
@@ -217,12 +220,24 @@ class Overlay2D(QWidget):
         self._badge(p, e, h['color'], h.get('label'), 13 if hot else 11.5)
 
 
+class OverMesh(gl.GLMeshItem):
+    """Półprzezroczysta nakładka na ścianę: przesunięta ku kamerze, więc nie ginie w z-fightingu z bryłą."""
+
+    def paint(self):
+        GL.glEnable(GL.GL_POLYGON_OFFSET_FILL)
+        GL.glPolygonOffset(-2.0, -2.0)
+        try:
+            super().paint()
+        finally:
+            GL.glDisable(GL.GL_POLYGON_OFFSET_FILL)
+
+
 class OffsetMesh(gl.GLMeshItem):
     """Siatka z przesunięciem wielokątów w głąb: krawędzie leżą czysto na ścianach, a ukryte części są naprawdę zasłonięte."""
 
     def paint(self):
         GL.glEnable(GL.GL_POLYGON_OFFSET_FILL)
-        GL.glPolygonOffset(1.0, 1.0)
+        GL.glPolygonOffset(2.0, 2.0)
         try:
             super().paint()
         finally:
@@ -340,7 +355,7 @@ class CadView(gl.GLViewWidget):
         dist = max(float(self.opts['distance']), 1e-6)
         ppm = (self.height() / 2) / (dist * math.tan(math.radians(float(self.opts['fov']) / 2)))
         step = next((g for g in GRID_LEVELS if g * ppm >= 12), GRID_LEVELS[-1])
-        want = next((z for z in PLANE_SIZES if z >= dist * .07), PLANE_SIZES[-1])
+        want = next((z for z in PLANE_SIZES if z >= dist * .035), PLANE_SIZES[-1])
         if want != self._plane_half and hasattr(self, '_plane_corners'):
             self._plane_half = float(want)
             self._apply_plane_size()
@@ -450,6 +465,8 @@ class CadView(gl.GLViewWidget):
                     hot = index in sel or picked
                     base = SKETCH_COLOR if body.kind == 'sketch' else EDGE_COLOR
                     line = gl.GLLinePlotItem(pos=points, color=PREVIEW_COLOR if hot else base, width=3.5 if hot else (2.3 if body.kind == 'sketch' else 1.5), antialias=True)
+                    if body.kind != 'sketch':
+                        line.setGLOptions('additive' if self.xray else 'translucent')
                     self.addItem(line)
                     items.append(line)
                 self._cache[body.id] = (key, items)
@@ -626,13 +643,25 @@ class CadView(gl.GLViewWidget):
         out[0::2], out[1::2] = point_at(starts), point_at(ends)
         return out.astype(np.float32)
 
+    def stretch_preview(self, origin, normal, factor):
+        """Natychmiastowe skalowanie podglądu wyciągnięcia wzdłuż normalnej (płynność w czasie rzeczywistym, zanim OCC policzy dokładny wynik)."""
+        n = np.asarray(normal, float)
+        n = n / np.linalg.norm(n)
+        o = np.asarray(origin, float)
+        m = np.eye(3) + (float(factor) - 1.0) * np.outer(n, n)
+        t = o - m @ o
+        mat = QMatrix4x4(m[0, 0], m[0, 1], m[0, 2], t[0], m[1, 0], m[1, 1], m[1, 2], t[1], m[2, 0], m[2, 1], m[2, 2], t[2], 0, 0, 0, 1)
+        for item in self.preview_items:
+            item.setTransform(mat)
+        self.update()
+
     def set_preview_mesh(self, mesh, color=(.25, .55, .95, .55), line_color=(.1, .25, .5, 1), width=1.5, dashed=False):
         for item in self.preview_items:
             self.removeItem(item)
         self.preview_items = []
         if mesh is not None:
             if len(mesh.triangles):
-                item = gl.GLMeshItem(vertexes=mesh.vertices, faces=mesh.triangles, smooth=False, color=color, drawEdges=False)
+                item = OverMesh(vertexes=mesh.vertices, faces=mesh.triangles, smooth=False, color=color, drawEdges=False)
                 item.setGLOptions('translucent')
                 self.addItem(item)
                 self.preview_items.append(item)
@@ -646,6 +675,25 @@ class CadView(gl.GLViewWidget):
                     line = gl.GLLinePlotItem(pos=points, color=line_color, width=width, antialias=True)
                 self.addItem(line)
                 self.preview_items.append(line)
+        self.update()
+
+    def set_selection_meshes(self, meshes, color=(1, .55, .1, .55), line_color=(.95, .42, .02, 1)):
+        """Trwałe podświetlenie wybranych ścian / profili (świeci się, dopóki operacja trwa)."""
+        for item in getattr(self, 'selection_items', []):
+            self.removeItem(item)
+        self.selection_items = []
+        for mesh in meshes or []:
+            if mesh is None:
+                continue
+            if len(mesh.triangles):
+                item = OverMesh(vertexes=mesh.vertices, faces=mesh.triangles, smooth=False, color=color, drawEdges=False)
+                item.setGLOptions('translucent')
+                self.addItem(item)
+                self.selection_items.append(item)
+            for points in mesh.edges.values():
+                line = gl.GLLinePlotItem(pos=points, color=line_color, width=3.2, antialias=True)
+                self.addItem(line)
+                self.selection_items.append(line)
         self.update()
 
     def set_handles(self, handles):

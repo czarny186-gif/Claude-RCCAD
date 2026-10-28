@@ -235,6 +235,15 @@ class StudioTests(unittest.TestCase):
         self.wait();self.assertEqual(len(w.document.bodies),2)
         self.assertAlmostEqual(k.bounds(w.document.bodies[0].shape).xlen,10,3)
 
+    def test_help_dialog_selection_glow_and_mirror_steps(self):
+        from rccad.help import HelpDialog,TOPICS
+        d=HelpDialog(self.w);self.assertEqual(d.list.count(),len(TOPICS));d.list.setCurrentRow(2);self.assertTrue(d.body.text());d.close()
+        w=self.w;self.sketch('rect',(0,0),(10,10));w.set_mode('extrude');self.pick_sketch_profile(w.document.bodies[0])
+        self.assertTrue(w.view.selection_items)
+        w.set_mode('mirror');self.assertEqual(w.mir_step1.value.text(),'Kliknij bryłę lub szkic')
+        w.view.stretch_preview((0,0,0),(0,0,1),1.5)
+
+
     def test_cube_button_picks_sketch_plane_and_grid_adapts(self):
         w=self.w;w.set_mode('plane');w._cube_clicked('X');self.assertEqual((w.mode,w.sketch_plane),('sketch','YZ'))
         w.view.opts['distance']=400;w.view.update();far=w.view._grid_key[0]

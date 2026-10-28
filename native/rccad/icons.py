@@ -105,6 +105,13 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
                 p.drawLine(QPointF(24, 32), QPointF(24, 8)); p.drawPolyline(QPolygonF([QPointF(15, 17), QPointF(24, 8), QPointF(33, 17)]))
             else:
                 p.drawLine(QPointF(24, 8), QPointF(24, 32)); p.drawPolyline(QPolygonF([QPointF(15, 23), QPointF(24, 32), QPointF(33, 23)]))
+    elif kind == 'f_help':
+        fill(_rounded(7, 9, 34, 30, 3), '#ffffff', BLUE)
+        p.setPen(pen(BLUE, 2.2)); p.drawLine(QPointF(24, 9), QPointF(24, 39))
+        p.setPen(pen(BLUE_SOFT, 2.4))
+        for y in (17, 23, 29):
+            p.drawLine(QPointF(11, y), QPointF(20, y)); p.drawLine(QPointF(28, y), QPointF(37, y))
+        p.setBrush(QColor(ORANGE)); p.setPen(Qt.NoPen); p.drawPolygon(QPolygonF([QPointF(31, 9), QPointF(37, 9), QPointF(37, 21), QPointF(34, 18), QPointF(31, 21)]))
     elif kind in ('xray', 'xray_w'):
         ink = '#ffffff' if kind == 'xray_w' else '#324c68'
         p.setBrush(Qt.NoBrush)
