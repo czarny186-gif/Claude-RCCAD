@@ -1049,10 +1049,11 @@ class StudioWindow(QMainWindow):
                 self.create_sketch([shape])
                 return
             if t == 'text':
-                meta = dict(tool='text', points=[[u, v]], text=self.text_edit.toPlainText().replace('\n', ' '), size=self.text_size.value(),
-                            font=self.text_font.currentData(), halign=self.text_align.currentData(), angle=self.text_angle.value(), sides=self.sides)
-                shape = self._meta_shape(self.sketch_plane, meta)
-                self.create_sketch([shape], 'Tekst', meta, select=True)
+                font = self.text_font.currentData()
+                shapes = kernel.text_shape(self.sketch_plane, self.text_edit.toPlainText().replace('\n', ' '), u, v, self.text_size.value(),
+                                           font='Serif' if font == 'serif' else 'Sans', bold=font == 'bold',
+                                           halign=self.text_align.currentData(), angle=self.text_angle.value())
+                self.create_sketch(shapes, 'Tekst')
                 return
         except kernel.CadError as exc:
             self.toast(str(exc))
@@ -1262,8 +1263,6 @@ class StudioWindow(QMainWindow):
             return kernel.arc3(plane, pts)
         if t == 'rect3':
             return kernel.rect3(plane, pts)
-        if t == 'text':
-            return kernel.text_compound(plane, meta)
         return kernel.sketch_shape(t, plane, pts, meta.get('sides', 5))
 
     def open_dim_edit(self):
@@ -1334,51 +1333,19 @@ class StudioWindow(QMainWindow):
         self.run_operation('Zmiana wymiarów szkicu', build, apply)
 
     # ---------- zaznaczanie i skalowanie kształtów myszą (szkic bez wybranego narzędzia) ----------
-    def _text_box(self, body, meta=None, mesh=None):
-        meta = meta or body.meta
-        mesh = mesh or body.mesh
-        if mesh is None or not mesh.edges:
-            return None
-        frame = kernel.frame_of(body.plane)
-        pts = np.concatenate([e.reshape(-1, 3) for e in mesh.edges.values()]).astype(float)
-        rel = pts - np.array(frame.origin, float)
-        uvs = np.stack([rel @ np.array(frame.xdir, float), rel @ np.array(frame.ydir, float)], axis=1)
-        margin = max(.4, float(meta.get('size', 10)) * .08)
-        box = sm.text_box([tuple(p) for p in uvs], tuple(meta['points'][0]), float(meta.get('angle', 0.0)), margin)
-        return {k: ([kernel.to_world(body.plane, *p) for p in v] if k == 'corners' else kernel.to_world(body.plane, *v)) for k, v in box.items()}
-
     def _update_grips(self, body=None, meta=None, mesh=None):
         grips, box = [], None
         if self.mode == 'sketch' and self.tool is None and len(self.selected) == 1:
             body = body or self.document.get(self.selected[0])
             if body is not None and body.meta and body.meta.get('tool') in self.EDITABLE:
                 meta = meta or body.meta
-                if meta['tool'] == 'text':
-                    box = self._text_box(body, meta, mesh)
-                else:
-                    grips = [kernel.to_world(body.plane, *g) for g in sm.grip_points(meta)]
+                grips = [kernel.to_world(body.plane, *g) for g in sm.grip_points(meta)]
         self.view.sketch_grips = grips
         self.view.sketch_box = box
         self.view.update()
 
-    def _hit_text_handle(self, box, x, y):
-        for which in ('rotate', 'scale', 'move'):
-            xy = self.view.project_one(box[which])
-            if xy is not None and math.hypot(xy[0] - x, xy[1] - y) <= 14:
-                return which
-        pts = [self.view.project_one(c) for c in box['corners']]
-        if all(p is not None for p in pts):
-            from PySide6.QtCore import QPointF
-            from PySide6.QtGui import QPolygonF
-            if QPolygonF([QPointF(*p) for p in pts]).containsPoint(QPointF(x, y), Qt.OddEvenFill):
-                return 'move'
-        return None
-
     def _drag_label(self, meta, x, y):
-        if meta['tool'] == 'text':
-            text = f"{sm.values(meta)[0]} mm · {sm.values(meta)[1]}°"
-        else:
-            text = ' × '.join(sm.values(meta)[:2]) + ' mm'
+        text = ' × '.join(sm.values(meta)[:2]) + ' mm'
         self.dim.setText(text)
         self.dim.adjustSize()
         self.dim.move(int(x) + 14, int(y) + 12)
@@ -1389,14 +1356,6 @@ class StudioWindow(QMainWindow):
             return False
         if kind == 'press':
             self._sk_drag = None
-            selected = self.document.get(self.selected[0]) if len(self.selected) == 1 else None
-            if selected is not None and selected.meta and selected.meta.get('tool') == 'text':
-                box = self._text_box(selected)
-                which = self._hit_text_handle(box, x, y) if box else None
-                uv = self.view.plane_point(selected.plane, x, y)
-                if which and uv is not None:
-                    self._sk_drag = dict(kind='text', which=which, body=selected, meta=selected.meta, uv0=uv, new=None)
-                    return True
             hit = self.view.nearest_edge(x, y, kinds=('sketch',))
             body = self.document.get(hit[0]) if hit else None
             if body is None:
@@ -1411,9 +1370,6 @@ class StudioWindow(QMainWindow):
             uv = self.view.plane_point(body.plane, x, y)
             if uv is None:
                 return True
-            if body.meta['tool'] == 'text':
-                self._sk_drag = dict(kind='text', which='move', body=body, meta=body.meta, uv0=uv, new=None)
-                return True
             pts = [tuple(p) for p in body.meta['points']]
             ppm = max(self.view._cam_ppm(), 1e-6)
             self._sk_drag = dict(kind='shape', body=body, meta=body.meta, new=None,
@@ -1427,7 +1383,7 @@ class StudioWindow(QMainWindow):
             uv = self.view.plane_point(body.plane, x, y)
             if uv is None:
                 return True
-            meta2 = sm.text_drag(drag['meta'], drag['which'], drag['uv0'], uv) if drag['kind'] == 'text' else sm.grab_apply(drag['meta'], drag['grab'], uv)
+            meta2 = sm.grab_apply(drag['meta'], drag['grab'], uv)
             if meta2 is None:
                 return True
             try:

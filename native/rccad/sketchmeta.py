@@ -5,7 +5,7 @@ import math
 
 TWO_POINT = ('rect', 'centerRect', 'ellipse', 'circle', 'circle2', 'polygon', 'line')
 THREE_POINT = ('arc', 'rect3', 'slot', 'circle3')
-EDITABLE = (*TWO_POINT, *THREE_POINT, 'text')
+EDITABLE = (*TWO_POINT, *THREE_POINT)
 LABELS = {
     'rect': ('Szerokość (mm)', 'Wysokość (mm)'), 'centerRect': ('Szerokość (mm)', 'Wysokość (mm)'), 'ellipse': ('Szerokość (mm)', 'Wysokość (mm)'),
     'circle': ('Promień (mm)',), 'polygon': ('Promień (mm)', 'Ilość kątów'), 'circle2': ('Średnica (mm)',), 'line': ('Długość (mm)', 'Kąt (°)'),
