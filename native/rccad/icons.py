@@ -105,6 +105,25 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
                 p.drawLine(QPointF(24, 32), QPointF(24, 8)); p.drawPolyline(QPolygonF([QPointF(15, 17), QPointF(24, 8), QPointF(33, 17)]))
             else:
                 p.drawLine(QPointF(24, 8), QPointF(24, 32)); p.drawPolyline(QPolygonF([QPointF(15, 23), QPointF(24, 32), QPointF(33, 23)]))
+    elif kind.startswith('v_'):
+        dot = lambda x, y, c=ORANGE: (p.setBrush(QColor(c)), p.setPen(Qt.NoPen), p.drawEllipse(QPointF(x, y), 3.2, 3.2))
+        thin = lambda c=BLUE, w=2.2: (p.setBrush(Qt.NoBrush), p.setPen(pen(c, w)))
+        if kind == 'v_rect2':
+            fill(_rounded(8, 12, 32, 24, 2), BLUE_SOFT, BLUE); dot(8, 12); dot(40, 36)
+        elif kind == 'v_rectC':
+            fill(_rounded(8, 12, 32, 24, 2), BLUE_SOFT, BLUE); thin(ORANGE, 1.8); p.drawLine(QPointF(24, 24), QPointF(40, 12)); dot(24, 24, GREEN); dot(40, 12)
+        elif kind == 'v_rect3':
+            poly = QPolygonF([QPointF(6, 30), QPointF(26, 12), QPointF(42, 24), QPointF(22, 42)])
+            p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE)); p.drawPolygon(poly); dot(6, 30); dot(26, 12); dot(22, 42)
+        elif kind == 'v_circle':
+            fill(_circle(24, 24, 15), BLUE_SOFT, BLUE); thin(ORANGE, 1.8); p.drawLine(QPointF(24, 24), QPointF(39, 24)); dot(24, 24, GREEN); dot(39, 24)
+        elif kind == 'v_circle2':
+            fill(_circle(24, 24, 15), BLUE_SOFT, BLUE); thin(ORANGE, 1.8); p.drawLine(QPointF(9, 24), QPointF(39, 24)); dot(9, 24); dot(39, 24)
+        elif kind == 'v_circle3':
+            fill(_circle(24, 24, 15), BLUE_SOFT, BLUE); dot(24, 9); dot(10.8, 31.5); dot(37.2, 31.5)
+        elif kind == 'v_tan':
+            thin(INK, 2.4); p.drawLine(QPointF(6, 42), QPointF(42, 42)); p.drawLine(QPointF(6, 42), QPointF(6, 6))
+            fill(_circle(22, 26, 16), BLUE_SOFT, BLUE); dot(6, 26, GREEN); dot(22, 42, GREEN)
     elif kind == 'check':
         p.setPen(pen('#ffffff', 4)); p.drawPolyline(QPolygonF([QPointF(11, 25), QPointF(21, 35), QPointF(38, 14)]))
     p.end()

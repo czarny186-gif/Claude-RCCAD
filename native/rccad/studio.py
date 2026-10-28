@@ -426,11 +426,14 @@ class StudioWindow(QMainWindow):
                      'circle': 'Środek i punkt na okręgu', 'circleTangent2': 'Kliknij dwie linie i wielkość', 'circle2': 'Końce średnicy',
                      'circle3': 'Trzy punkty na okręgu'}
 
+    VARIANT_ICONS = {'rect': 'v_rect2', 'centerRect': 'v_rectC', 'rect3': 'v_rect3', 'circle': 'v_circle', 'circle2': 'v_circle2', 'circle3': 'v_circle3',
+                     'circleTangent2': 'v_tan'}
+
     def _variants_menu(self, items, anchor, main):
         entries = []
         for item in items:
             name = item['shape']
-            icon = ui.svg_icon(ui.stroked_shape_svg(item['svg']), normal='#2f87e8', size=30).pixmap(30, 30)
+            icon = ui.icons.pixmap(self.VARIANT_ICONS.get(name, 'v_rect2'), 34)
             entries.append((icon, VARIANT_LABELS.get(name, item['title']), self.VARIANT_HINTS.get(name, ''), lambda n=name: self.choose_tool(n, main)))
         menu = ui.RichMenu(self, entries, 'Sposób rysowania', 290)
         self._popup = menu
