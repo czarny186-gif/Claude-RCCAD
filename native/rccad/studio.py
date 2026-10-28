@@ -5,7 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 import numpy as np
 from PySide6.QtCore import QEvent, QObject, QPoint, QRunnable, QSize, Qt, QThreadPool, QTimer, Signal
-from PySide6.QtGui import QCursor, QKeySequence, QMatrix4x4, QShortcut
+from PySide6.QtGui import QCursor, QIcon, QKeySequence, QMatrix4x4, QShortcut
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
                                QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QToolButton, QVBoxLayout, QWidget)
 from . import kernel
@@ -14,6 +14,7 @@ from . import snap as snapping
 icons_green = '#2fa56d'
 icons_orange = '#f09a22'
 from .document import Body, Document
+from .viewcube import ViewCube
 from .viewport import CadView
 
 NEED = {'rect': 2, 'centerRect': 2, 'rect3': 3, 'circle': 2, 'circle2': 2, 'circle3': 3, 'ellipse': 2, 'slot': 3, 'polygon': 2,
@@ -164,11 +165,13 @@ class StudioWindow(QMainWindow):
         self.view.contextRequested.connect(self.context_menu)
         self.view.handleDragged.connect(self.handle_dragged)
         self.view.handleReleased.connect(self.handle_released)
+        self.view.pointDragged.connect(self.handle_point_dragged)
         self._build_overlays()
         self.view.installEventFilter(self)
         self._timers = {}
         for name, slot in (('extrude', self.update_extrude_preview), ('mod', self.update_mod_preview), ('bool', self.update_bool_preview),
-                           ('mirror', self.update_mirror_preview), ('transform', self.update_transform_preview), ('dim', self.update_dim_preview)):
+                           ('mirror', self.update_mirror_preview), ('transform', self.update_transform_preview), ('dim', self.update_dim_preview),
+                           ('gizmo', self._place_gizmo)):
             timer = QTimer(self)
             timer.setSingleShot(True)
             timer.setInterval(40)
@@ -179,6 +182,7 @@ class StudioWindow(QMainWindow):
                         ('Ctrl+C', self.copy_selected), ('Ctrl+X', self.cut_selected), ('Ctrl+V', self.paste_clipboard)):
             QShortcut(QKeySequence(seq), self, activated=fn)
         self.refresh(True)
+        self.view.show_planes(True)
         self._layout_overlays()
         self.set_origin_text()
 
@@ -252,6 +256,19 @@ class StudioWindow(QMainWindow):
         self.layers.setToolTip('Pokaż / ukryj płaszczyzny')
         self.layers.toggled.connect(self._planes_toggled)
         ui.shadow(self.layers, 12, 3, 28)
+        self.xray = QToolButton(v)
+        self.xray.setObjectName('layers')
+        self.xray.setCheckable(True)
+        self.xray.setFixedSize(40, 40)
+        xicon = QIcon()
+        xicon.addPixmap(ui.icons.pixmap('xray', 26), QIcon.Normal, QIcon.Off)
+        xicon.addPixmap(ui.icons.pixmap('xray_w', 26), QIcon.Normal, QIcon.On)
+        xicon.addPixmap(ui.icons.pixmap('xray_w', 26), QIcon.Active, QIcon.On)
+        self.xray.setIcon(xicon)
+        self.xray.setIconSize(QSize(26, 26))
+        self.xray.setToolTip('Przezroczyste bryły (podgląd ukrytych krawędzi)')
+        self.xray.toggled.connect(self._xray_toggled)
+        ui.shadow(self.xray, 12, 3, 28)
         self.home = QToolButton(v)
         self.home.setObjectName('home')
         self.home.setText('⌂')
@@ -260,26 +277,14 @@ class StudioWindow(QMainWindow):
         self.home.clicked.connect(lambda: (self.view.set_view('iso'), self.view.fit_all(), self._mark_view('iso')))
         ui.shadow(self.home, 12, 3, 28)
 
-        # kostka widoków: siatka 3 × 3 kółek 36 px, odstęp 5, margines 9
-        self.cube = QFrame(v)
-        self.cube.setObjectName('floating')
-        self.cube.setFixedSize(138, 138)
+        # kostka orientacji (jak ViewCube w Fusion 360): obraca się z kamerą, ściana / narożnik = widok
+        self.cube = ViewCube(self.view, v)
         ui.shadow(self.cube, 22, 5, 32)
-        cells = [('Z', 'Z', 'Z', 0, 1, 'Widok z góry (+Z)'), ('−X', '-X', 'X', 1, 0, 'Widok od −X'), ('3D', 'iso', 'I', 1, 1, 'Izometria'),
-                 ('X', 'X', 'X', 1, 2, 'Widok od +X'), ('−Y', '-Y', 'Y', 2, 0, 'Widok od −Y'), ('−Z', '-Z', 'Z', 2, 1, 'Widok od −Z'),
-                 ('Y', 'Y', 'Y', 2, 2, 'Widok od +Y')]
         self.cube_buttons = {}
-        for text, name, cls, row, col, tip in cells:
-            button = QToolButton(self.cube)
-            button.setObjectName('cube' + cls)
-            button.setText(text)
-            button.setCheckable(True)
-            button.setFixedSize(36, 36)
-            button.move(9 + col * 41, 9 + row * 41)
-            button.setToolTip(tip)
-            button.clicked.connect(lambda _=False, n=name: self._cube_clicked(n))
-            self.cube_buttons[name] = button
-        self.cube_buttons['iso'].setChecked(True)
+        self.cube.faceClicked.connect(self._cube_clicked)
+        self.cube.directionClicked.connect(lambda az, el: (self.view.setCameraPosition(azimuth=az, elevation=el), self.view.update()))
+        self.view.cameraMoved.connect(self.cube.update)
+        self.view.cameraMoved.connect(self._camera_changed)
 
         # pasek transformacji (przesuń / obróć)
         self.pad = QFrame(v)
@@ -594,9 +599,10 @@ class StudioWindow(QMainWindow):
         for i, key in enumerate(('file', 'sketch', 'extrude', 'bool', 'mod', 'mirror')):
             self.tools[key].move(18 + 60 * i, 18)
         self.shape_bar.move(18, 80)
-        self.undo_button.move(W - 350, 20)
-        self.redo_button.move(W - 302, 20)
-        self.layers.move(W - 254, 20)
+        self.undo_button.move(W - 398, 20)
+        self.redo_button.move(W - 350, 20)
+        self.layers.move(W - 302, 20)
+        self.xray.move(W - 254, 20)
         self.home.move(W - 205, 20)
         self.cube.move(W - 160, 20)
         self.pad.adjustSize()
@@ -618,7 +624,7 @@ class StudioWindow(QMainWindow):
         self.ex_panel.move(18, 170)
         self.ex_bar.adjustSize()
         self.ex_bar.move(346, 170)
-        for w in (*self.tools.values(), self.shape_bar, self.undo_button, self.redo_button, self.layers, self.home, self.cube, self.pad,
+        for w in (*self.tools.values(), self.shape_bar, self.undo_button, self.redo_button, self.layers, self.xray, self.home, self.cube, self.pad,
                   self.t_editor, self.sk_bar, self.origin_label, *self.panels, self.dim_panel, self.dim, self.notice):
             w.raise_()
 
@@ -652,8 +658,7 @@ class StudioWindow(QMainWindow):
     # widok: kostka, płaszczyzny
     # =====================================================================
     def _mark_view(self, name):
-        for key, button in self.cube_buttons.items():
-            button.setChecked(key == name)
+        pass
 
     CUBE_PLANES = {'Z': 'XY', '-Z': 'XY', 'X': 'YZ', '-X': 'YZ', 'Y': 'XZ', '-Y': 'XZ'}
 
@@ -669,8 +674,17 @@ class StudioWindow(QMainWindow):
 
     def _planes_toggled(self, on):
         self._planes_visible = on
-        if self.mode != 'sketch':
+        if self.mode != 'plane':
             self.view.show_planes(on)
+
+    def _xray_toggled(self, on):
+        self.view.set_xray(on)
+
+    def _camera_changed(self):
+        """Uchwyty przesuwania / obrotu skalują się z odległością kamery, żeby były zawsze wygodne do złapania."""
+        if self.mode in ('move', 'rotate') and self.t_target is not None and self._hv is None and not self.view._handle_drag:
+            if not self._timers['gizmo'].isActive():
+                self._timers['gizmo'].start()
 
     # =====================================================================
     # tryby
@@ -691,6 +705,7 @@ class StudioWindow(QMainWindow):
         self.cancel_previews()
         self.view.snapper = None
         self.view.hover_gate = None
+        self.view.free_drag = None
         self.mode = mode
         self.points = []
         self.tangent_lines = []
@@ -818,6 +833,10 @@ class StudioWindow(QMainWindow):
         self.view.snapper = self._snapper
         self.view.hover_gate = self.sketch_hover_wanted
         self.view.show_planes(False)
+        self.layers.blockSignals(True)
+        self.layers.setChecked(False)
+        self.layers.blockSignals(False)
+        self._planes_visible = False
         self.view.set_preview_mesh(None)
         self.view.look_along(plane)
         self.view.set_grid_frame(plane)
@@ -1716,27 +1735,51 @@ class StudioWindow(QMainWindow):
             spin.setValue(0)
             spin.blockSignals(False)
         self.selected = [body.id]
+        self.view.free_drag = (body.id, self.t_center) if self.mode == 'move' else None
         self.refresh()
         self._place_gizmo()
 
     def _place_gizmo(self):
+        """Uchwyty w stylu Fusion 360: przesuwanie = kolorowe strzałki osi + kwadraty płaszczyzn; obrót = kolorowe pierścienie."""
         if self.t_target is None or self.mode not in ('move', 'rotate'):
             self.view.set_handles([])
             return
         c, r = self.t_center, self.t_radius
-        move = np.array([s.value() for s in self.t_spins]) if self.mode == 'move' else np.zeros(3)
+        axes = [np.array(a) for a in AXES]
         handles = []
-        for i, axis in enumerate(AXES):
-            a = np.array(axis)
-            letter = 'XYZ'[i]
-            if self.mode == 'move':
-                handles.append(dict(id='xyz'[i], start=c + move, tip=c + move + a * r, dir=a, color=AXIS_COLORS[i], label=letter))
-            else:
+        if self.mode == 'move':
+            base = c + np.array([s.value() for s in self.t_spins])
+            length = max(r, float(self.view.opts['distance']) * .13)
+            for i, a in enumerate(axes):
+                handles.append(dict(id='xyz'[i], kind='axis', start=base, tip=base + a * length, dir=a, color=AXIS_COLORS[i], label='XYZ'[i], min_px=46))
+            for i, j, k in ((0, 1, 2), (0, 2, 1), (1, 2, 0)):
+                a, b = axes[i], axes[j]
+                q0 = base + (a + b) * .2 * length
+                quad = [q0, q0 + a * .26 * length, q0 + (a + b) * .26 * length, q0 + b * .26 * length]
+                handles.append(dict(id='p' + 'xyz'[i] + 'xyz'[j], kind='plane', quad=quad, plane_origin=base, normal=axes[k], color=AXIS_COLORS[k]))
+        else:
+            for i, a in enumerate(axes):
                 e1 = np.cross(a, (0, 0, 1.0) if abs(a[2]) < .9 else (1.0, 0, 0))
                 e1 /= np.linalg.norm(e1)
-                tip = c + e1 * r
-                handles.append(dict(id='xyz'[i], start=tip, tip=tip, dir=np.cross(a, e1), color=AXIS_COLORS[i], label=letter, ring=(c, a, r), min_px=0))
+                handles.append(dict(id='xyz'[i], kind='ring', ring=(c, a, r), tip=c + e1 * r, dir=np.cross(a, e1), color=AXIS_COLORS[i], label='XYZ'[i]))
         self.view.set_handles(handles)
+
+    def handle_point_dragged(self, hid, vec):
+        """Przeciąganie kwadratu płaszczyzny lub samej bryły (lewy przycisk): przesunięcie w płaszczyźnie."""
+        if self.mode != 'move' or self.t_target is None:
+            return
+        if self._hv is None or self._hv[0] != 'pt':
+            self._hv = ('pt', np.array([s.value() for s in self.t_spins], float))
+        mask = {'pxy': (0, 1), 'pxz': (0, 2), 'pyz': (1, 2)}.get(hid, (0, 1, 2))
+        values = self._hv[1].copy()
+        for i in mask:
+            values[i] += float(vec[i])
+        for spin, value in zip(self.t_spins, values):
+            spin.blockSignals(True)
+            spin.setValue(round(float(value), 2))
+            spin.blockSignals(False)
+        self.update_transform_preview()
+        self._place_gizmo()
     def _transform_changed(self):
         self.update_transform_preview()
         if self._hv is None:

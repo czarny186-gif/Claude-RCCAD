@@ -51,7 +51,7 @@ class StudioTests(unittest.TestCase):
         for i,key in enumerate(('file','sketch','extrude','bool','mod','mirror')):
             b=w.tools[key];self.assertEqual((b.x(),b.y(),b.width(),b.height()),(18+60*i,18,52,52),key)
         self.assertEqual(w.cube.width(),138);self.assertEqual(w.cube.x(),W-160)
-        self.assertEqual(w.undo_button.x(),W-350);self.assertEqual(w.redo_button.x(),W-302);self.assertEqual(w.layers.x(),W-254)
+        self.assertEqual(w.undo_button.x(),W-398);self.assertEqual(w.redo_button.x(),W-350);self.assertEqual(w.layers.x(),W-302);self.assertEqual(w.xray.x(),W-254)
         self.assertFalse(w.shape_bar.isVisible())
 
     def test_rectangle_is_live_on_any_plane(self):
@@ -206,7 +206,7 @@ class StudioTests(unittest.TestCase):
     def test_handles_are_drawn_on_top_overlay_and_draggable(self):
         w=self.w;self.sketch('rect',(0,0),(10,10));w.set_mode('extrude');self.pick_sketch_profile(w.document.bodies[0])
         self.assertTrue(w.view.handles);geo=w.view.handle_geometry(w.view.handles[0]);self.assertIsNotNone(geo)
-        grabbed=w.view._grab_handle(*geo['end']);self.assertEqual(grabbed[1],'ex')
+        grabbed=w.view._grab_handle(*geo['end']);self.assertIsNotNone(grabbed);self.assertEqual(grabbed['id'],'ex')
         w.view.overlay.repaint();self.app.processEvents()
 
     def test_snap_to_existing_sketch_corner(self):
@@ -236,7 +236,7 @@ class StudioTests(unittest.TestCase):
         self.assertAlmostEqual(k.bounds(w.document.bodies[0].shape).xlen,10,3)
 
     def test_cube_button_picks_sketch_plane_and_grid_adapts(self):
-        w=self.w;w.set_mode('plane');w.cube_buttons['X'].click();self.assertEqual((w.mode,w.sketch_plane),('sketch','YZ'))
+        w=self.w;w.set_mode('plane');w._cube_clicked('X');self.assertEqual((w.mode,w.sketch_plane),('sketch','YZ'))
         w.view.opts['distance']=400;w.view.update();far=w.view._grid_key[0]
         w.view.opts['distance']=15;w.view.update();near=w.view._grid_key[0];self.assertLess(near,far)
 
@@ -306,7 +306,7 @@ class StudioTests(unittest.TestCase):
                     if b.objectName()=='shapeExpand':b.click();self.app.processEvents()
                 self.w.set_mode(None)
                 for b in self.w.cube.findChildren(QToolButton):b.click()
-                for b in (*self.w.pad_buttons.values(),self.w.layers,self.w.layers,self.w.home,self.w.undo_button,self.w.redo_button):b.click();self.app.processEvents()
+                for b in (*self.w.pad_buttons.values(),self.w.layers,self.w.xray,self.w.home,self.w.undo_button,self.w.redo_button):b.click();self.app.processEvents()
         finally:sys.excepthook=old
         self.assertEqual(errors,[])
 

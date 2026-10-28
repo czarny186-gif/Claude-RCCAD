@@ -105,6 +105,15 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
                 p.drawLine(QPointF(24, 32), QPointF(24, 8)); p.drawPolyline(QPolygonF([QPointF(15, 17), QPointF(24, 8), QPointF(33, 17)]))
             else:
                 p.drawLine(QPointF(24, 8), QPointF(24, 32)); p.drawPolyline(QPolygonF([QPointF(15, 23), QPointF(24, 32), QPointF(33, 23)]))
+    elif kind in ('xray', 'xray_w'):
+        ink = '#ffffff' if kind == 'xray_w' else '#324c68'
+        p.setBrush(Qt.NoBrush)
+        dashed = pen(ink, 1.8); dashed.setStyle(Qt.DashLine)
+        p.setPen(dashed)
+        p.drawRect(QRectF(15, 6, 24, 24)); p.drawLine(QPointF(15, 6), QPointF(6, 15)); p.drawLine(QPointF(39, 6), QPointF(30, 15)); p.drawLine(QPointF(39, 30), QPointF(30, 39))
+        p.setPen(pen(ink, 2.4))
+        p.drawRect(QRectF(6, 15, 24, 24)); p.drawLine(QPointF(6, 15), QPointF(15, 6)); p.drawLine(QPointF(30, 15), QPointF(39, 6)); p.drawLine(QPointF(30, 39), QPointF(39, 30))
+        p.drawLine(QPointF(30, 15), QPointF(39, 6)); p.drawLine(QPointF(39, 6), QPointF(39, 30))
     elif kind.startswith('v_'):
         dot = lambda x, y, c=ORANGE: (p.setBrush(QColor(c)), p.setPen(Qt.NoPen), p.drawEllipse(QPointF(x, y), 3.2, 3.2))
         thin = lambda c=BLUE, w=2.2: (p.setBrush(Qt.NoBrush), p.setPen(pen(c, w)))
