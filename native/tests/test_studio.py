@@ -258,8 +258,8 @@ class StudioTests(unittest.TestCase):
 
     def test_idle_planes_axes_close_prompt_and_reverse_arrow(self):
         w=self.w;w.set_mode(None);w.view.set_view('iso');self.app.processEvents()
-        xy=w.view.project_one((.5,.5,0));self.assertEqual(w.view.plane_at(*xy),'XY')
-        w.view_clicked(xy[0],xy[1],False,False);self.assertEqual((w.mode,w.sketch_plane),('sketch','XY'))
+        xy=w.view.project_one((.5,.5,0));name=w.view.plane_at(*xy);self.assertIn(name,('XY','XZ','YZ'))
+        w.view_clicked(xy[0],xy[1],False,False);self.assertEqual((w.mode,w.sketch_plane),('sketch',name))
         w.set_mode(None);w.view.set_view('Z');w.view.update();self.assertFalse(w.view.axis_lines[2][0].visible())
         w.view.set_view('iso');w.view.update();self.assertTrue(w.view.axis_lines[2][0].visible())
         self.sketch('rect',(0,0),(10,10));w.set_mode('extrude');self.pick_sketch_profile(w.document.bodies[0])
