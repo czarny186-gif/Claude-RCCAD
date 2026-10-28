@@ -183,6 +183,17 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             elif sh == 'trim':
                 st(ink, 2.8); p.drawLine(QPointF(14, 14), QPointF(40, 36)); p.drawLine(QPointF(14, 34), QPointF(40, 12))
                 st(acc, 2.6); p.drawEllipse(QPointF(11, 12), 4.5, 4.5); p.drawEllipse(QPointF(11, 36), 4.5, 4.5)
+        elif name in ('move', 'rotate'):
+            if name == 'move':
+                st(ink, 2.8)
+                for dx, dy in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+                    p.drawLine(QPointF(24, 24), QPointF(24 + dx * 16, 24 + dy * 16))
+                    tip = (24 + dx * 18, 24 + dy * 18)
+                    p.drawPolyline(poly([(tip[0] - dx * 6 - dy * 5, tip[1] - dy * 6 + dx * 5), tip, (tip[0] - dx * 6 + dy * 5, tip[1] - dy * 6 - dx * 5)]))
+                p.setBrush(QColor(acc)); p.setPen(Qt.NoPen); p.drawEllipse(QPointF(24, 24), 4.2, 4.2)
+            else:
+                st(ink, 3.0); p.drawArc(QRectF(9, 9, 30, 30), 40 * 16, 270 * 16)
+                p.setBrush(QColor(acc)); p.setPen(Qt.NoPen); p.drawPolygon(poly([(36, 10), (38, 22), (27, 17)]))
         elif name == 'trash':
             st(ink, 2.8); p.drawLine(QPointF(9, 13), QPointF(39, 13)); p.drawPolyline(poly([(19, 13), (19, 8), (29, 8), (29, 13)]))
             body = QPainterPath(); body.moveTo(12, 13); body.lineTo(14, 41); body.lineTo(34, 41); body.lineTo(36, 13)

@@ -38,7 +38,7 @@ QToolButton#shapeMain:hover { background:#e9f3ff; border-color:#2f87e8; }
 QToolButton#shapeMain:checked, QToolButton#shapeMain:checked:hover { background:#2f87e8; border-color:#2f87e8; }
 QToolButton#shapeExpand { background:#fff; border:1px solid #cbd9e6; border-left:0; border-radius:8px; border-top-left-radius:0; border-bottom-left-radius:0; color:#344e69; font-size:11px; }
 QToolButton#shapeExpand:hover { background:#e9f3ff; color:#17314a; }
-QToolButton#padTool { background:#fff; border:1px solid #bdccdb; border-radius:8px; color:#344e69; font-size:18px; font-weight:600; }
+QToolButton#padTool { background:#fff; border:1px solid #bdccdb; border-radius:8px; color:#344e69; font-size:14px; font-weight:600; }
 QToolButton#padTool:hover { border-color:#187ac1; }
 QToolButton#padTool:checked { background:#2f87e8; color:#fff; border-color:#2f87e8; }
 QToolButton#cubeX, QToolButton#cubeY, QToolButton#cubeZ, QToolButton#cubeI { border:1px solid transparent; border-radius:18px; color:#fff; font-weight:700; font-size:12px; }
@@ -49,8 +49,8 @@ QFrame#floating { background:rgba(255,255,255,0.94); border:1px solid #d0dce8; b
 QFrame#bar { background:rgba(255,255,255,0.93); border:1px solid #bdccdb; border-radius:13px; }
 QFrame#toolbar { background:rgba(255,255,255,0.92); border:1px solid #cbd9e6; border-radius:12px; }
 QFrame#panel { background:rgba(255,255,255,0.97); border:1px solid #b9cde0; border-radius:15px; }
-QLabel#ptitle { font-size:13px; font-weight:700; color:#1e3a52; background:transparent; }
-QLabel#psub { font-size:11px; color:#6c869b; background:transparent; }
+QLabel#ptitle { font-size:15px; font-weight:700; color:#1e3a52; background:transparent; }
+QLabel#psub { font-size:12px; color:#6c869b; background:transparent; }
 QLabel#badge { background:transparent; }
 QFrame#seg { background:transparent; }
 QToolButton#segbtn { background:#f3f8fd; border:1px solid #d3e0ec; border-radius:10px; color:#41596f; font-size:11px; padding:7px 2px 4px 2px; }
@@ -281,8 +281,8 @@ def panel_header(kind: str, title: str, subtitle: str = '', color: str = icons.B
     lay.setSpacing(10)
     pic = QLabel()
     pic.setObjectName('badge')
-    pic.setPixmap(icons.badge(kind, color, 36))
-    pic.setFixedSize(36, 36)
+    pic.setPixmap(icons.badge(kind, color, 50))
+    pic.setFixedSize(50, 50)
     lay.addWidget(pic)
     col = QVBoxLayout()
     col.setSpacing(0)
@@ -421,11 +421,11 @@ class StepRow(QFrame):
         lay.setContentsMargins(10, 8, 12, 8)
         lay.setSpacing(10)
         self.mark = QLabel()
-        self.mark.setFixedSize(26, 26)
+        self.mark.setFixedSize(30, 30)
         self.mark.setAlignment(Qt.AlignCenter)
         lay.addWidget(self.mark)
         self.pic = QLabel()
-        self.pic.setFixedSize(34, 34)
+        self.pic.setFixedSize(46, 46)
         lay.addWidget(self.pic)
         col = QVBoxLayout()
         col.setSpacing(0)
@@ -442,13 +442,13 @@ class StepRow(QFrame):
         colors = {'pending': ('#f3f6fa', '#d6e0ea', '#9fb2c4'), 'active': ('#fff6e8', '#f09a22', '#f09a22'), 'done': ('#eaf8f1', '#2fa56d', '#2fa56d')}
         bg, border, accent = colors[state]
         self.setStyleSheet(f'QFrame#step{{background:{bg};border:1.6px solid {border};border-radius:10px;}}')
-        self.mark.setStyleSheet(f'background:{accent};color:white;border-radius:13px;font-weight:800;border:none;')
+        self.mark.setStyleSheet(f'background:{accent};color:white;border-radius:15px;font-weight:800;font-size:14px;border:none;')
         self.mark.setText('✓' if state == 'done' else str(self.number))
         self.pic.setStyleSheet('border:none;background:transparent;')
-        self.pic.setPixmap(icons.badge(self.icon_kind, accent, 34))
+        self.pic.setPixmap(icons.badge(self.icon_kind, accent, 46))
         self.value.setText(value)
         self.value.setStyleSheet('color:#6c869b;border:none;')
-        self.title.setStyleSheet('font-weight:700;color:#27415a;border:none;')
+        self.title.setStyleSheet('font-weight:700;font-size:14px;color:#27415a;border:none;')
 
 
 def style_icon(name: str, size: int = 29) -> QIcon:

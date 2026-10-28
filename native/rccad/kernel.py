@@ -524,18 +524,37 @@ def text_shape(plane, text, u, v, size=10.0, font="Arial", bold=False, halign="l
     if not text:
         raise CadError("Wpisz treść tekstu.")
     kind = "bold" if bold else "regular"
-    solid = wp(plane).center(float(u), float(v)).text(text, float(size), 0.2, combine=False, font=font, kind=kind,
-                                                      halign=halign, valign="bottom").val()
+    import sys
+    if sys.platform == "win32":
+        font = {"Sans": "Arial", "Serif": "Times New Roman"}.get(font, font)
+    solid = None
+    for name in (font, "Arial"):
+        try:
+            solid = wp(plane).center(float(u), float(v)).text(text, float(size), 0.2, combine=False, font=name, kind=kind,
+                                                              halign=halign, valign="bottom").val()
+            if solid is not None and solid.Faces():
+                break
+        except Exception:
+            solid = None
     fr = frame_of(plane)
     n0, o0 = np.array(fr.normal), np.array(fr.origin)
-    wires = [f.outerWire() for f in (solid.Faces() if solid is not None else [])
-             if abs(float((np.array(f.Center().toTuple()) - o0) @ n0)) < 1e-5 and abs(abs(float(np.array(f.normalAt().toTuple()) @ n0)) - 1) < 1e-3]
+    wires = [w for f in (solid.Faces() if solid is not None else [])
+             if abs(float((np.array(f.Center().toTuple()) - o0) @ n0)) < 1e-5 and abs(abs(float(np.array(f.normalAt().toTuple()) @ n0)) - 1) < 1e-3
+             for w in f.Wires()]
     if not wires:
         raise CadError("Nie udało się utworzyć tekstu (brak czcionki).")
     if abs(float(angle)) > 1e-9:
         pivot = cq.Vector(*to_world(plane, u, v))
         wires = [w.rotate(pivot, pivot + cq.Vector(*fr.normal), float(angle)) for w in wires]
     return wires
+
+
+def text_compound(plane, meta):
+    """Cały napis jako jeden obiekt szkicu (wszystkie kontury liter, także otwory) z parametrów meta."""
+    key = meta.get("font", "sans")
+    wires = text_shape(plane, meta["text"], *meta["points"][0], size=meta.get("size", 10.0), font="Serif" if key == "serif" else "Sans",
+                       bold=key == "bold", halign=meta.get("halign", "left"), angle=meta.get("angle", 0.0))
+    return cq.Compound.makeCompound(wires)
 
 
 def extrude2(wire, plane, d1, d2):
