@@ -538,6 +538,20 @@ def text_shape(plane, text, u, v, size=10.0, font="Arial", bold=False, halign="l
     return wires
 
 
+def profile_normal(shape, reference):
+    """Rzeczywista normalna płaskiego profilu (także po obrocie / przesunięciu szkicu), zwrócona zgodnie z płaszczyzną odniesienia."""
+    ref = np.asarray(reference, dtype=float)
+    try:
+        wires = shape.Wires() if hasattr(shape, "Wires") else [shape]
+        n = np.array(cq.Face.makeFromWires(wires[0]).normalAt().toTuple(), dtype=float)
+        n = n / np.linalg.norm(n)
+    except Exception:
+        return tuple(ref)
+    if float(n @ ref) < 0:
+        n = -n
+    return tuple(float(c) for c in n)
+
+
 def extrude2(wire, plane, d1, d2):
     """Wyciągnięcie w dwie strony niezależnie: d1 po normalnej, d2 przeciwnie."""
     d1, d2 = float(d1), float(d2)

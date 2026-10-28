@@ -1587,7 +1587,9 @@ class StudioWindow(QMainWindow):
         if bid is not None:
             body = self.document.get(bid)
             frame = kernel.frame_of(body.plane)
-            return dict(kind='sketch', id=bid, face=None, wire=body.shape, plane=body.plane, normal=tuple(frame.normal), center=body.shape.Center().toTuple())
+            normal = kernel.profile_normal(body.shape, frame.normal)   # szkic mógł zostać obrócony: wyciągamy wzdłuż jego rzeczywistej normalnej
+            tilted = abs(float(np.dot(normal, frame.normal))) < 1 - 1e-6
+            return dict(kind='sketch', id=bid, face=None, wire=body.shape, plane=None if tilted else body.plane, normal=normal, center=body.shape.Center().toTuple())
         return None
     def pick_profile(self, x, y, shift=False):
         try:
