@@ -258,10 +258,10 @@ class StudioTests(unittest.TestCase):
 
     def test_idle_planes_axes_close_prompt_and_reverse_arrow(self):
         w=self.w;w.set_mode(None);w.view.set_view('iso');self.app.processEvents()
-        xy=w.view.project_one((.5,-.5,0));name=w.view.plane_at(*xy);self.assertIn(name,('XY','XZ','YZ'))
+        xy=w.view.project_one((.5,.5,0));name=w.view.plane_at(*xy);self.assertIn(name,('XY','XZ','YZ'))
         w.view_clicked(xy[0],xy[1],False,False);self.assertEqual((w.mode,w.sketch_plane),('sketch',name))
-        w.set_mode(None);w.view.set_view('Z');w.view.update();self.assertFalse(w.view.axis_lines[4][0].visible())
-        w.view.set_view('iso');w.view.update();self.assertTrue(w.view.axis_lines[4][0].visible())
+        w.set_mode(None);w.view.set_view('Z');w.view.update();self.assertFalse(w.view.axis_lines[2][0].visible())
+        w.view.set_view('iso');w.view.update();self.assertTrue(w.view.axis_lines[2][0].visible())
         self.sketch('rect',(0,0),(10,10));w.set_mode('extrude');self.pick_sketch_profile(w.document.bodies[0])
         w.ex_value.setValue(-5);w._place_extrude_handle();h=w.view.handles[0];self.assertAlmostEqual(float(np.dot(h['dir'],h['tip']-h['start'])),-5,3)
         self.assertTrue(w.document.dirty)
@@ -305,21 +305,6 @@ class StudioTests(unittest.TestCase):
         b=k.bounds(w.document.bodies[-1].shape);self.assertAlmostEqual(b.xlen,30,1);self.assertAlmostEqual(b.ylen,10,1)
         w._tool_clicked('circle');self.assertEqual(w.tool,'circle');self.assertEqual(w.selected,[])
         w._tool_clicked('circle');self.assertIsNone(w.tool)
-
-    def test_fusion_planes_axes_and_remembered_sketch_plane(self):
-        w=self.w;v=w.view;v.show_planes(True);self.assertTrue(v._origin_visible)
-        xy=v.project_one((2,-2,0));self.assertEqual(v.plane_at(*xy) in ('XY','XZ','YZ'),True)
-        xn=v.project_one((-5,-5,0));self.assertIsNone(v.plane_at(*xn))
-        self.sketch('rect',(0,0),(5,5));w.set_mode(None)
-        w.toggle_mode('sketch');self.assertEqual((w.mode,w.sketch_plane),('sketch','XY'))
-        w.layers.setChecked(False);w.layers.setChecked(True);self.assertTrue(w.view.plane_pick)
-        w.set_mode(None)
-
-    def test_arc_is_editable_after_drawing(self):
-        w=self.w;w.set_mode('plane');w.plane_picked('XY')
-        w.choose_tool('arc');w.sketch_clicked('XY',0,20);w.sketch_clicked('XY',5,23);w.sketch_clicked('XY',10,20);self.wait()
-        arc=w.document.bodies[-1];self.assertEqual(arc.meta['tool'],'arc');w.choose_tool(None);w.selected=[arc.id];self.assertTrue(w.open_dim_edit())
-        self.assertEqual([e.text() for e in w.dim_edits if e.isVisible()],['10.0','3.0']);w.dim_panel.hide()
 
     def test_cube_button_picks_sketch_plane_and_grid_adapts(self):
         w=self.w;w.set_mode('plane');w._cube_clicked('X');self.assertEqual((w.mode,w.sketch_plane),('sketch','YZ'))

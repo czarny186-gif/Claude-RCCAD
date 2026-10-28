@@ -104,44 +104,6 @@ class Overlay2D(QWidget):
                 p.drawEllipse(QPointF(*xy), 4.5, 4.5)
                 p.drawLine(QPointF(xy[0] - 9, xy[1]), QPointF(xy[0] + 9, xy[1]))
                 p.drawLine(QPointF(xy[0], xy[1] - 9), QPointF(xy[0], xy[1] + 9))
-            if v._origin_visible:
-                xy0 = v.project_one((0, 0, 0))
-                if xy0 is not None:
-                    p.setPen(QPen(QColor('#3d4a58'), 1.8))
-                    p.setBrush(QColor('#ffffff'))
-                    p.drawEllipse(QPointF(*xy0), 6.5, 6.5)
-                    p.setBrush(QColor('#8d9aa8'))
-                    p.setPen(Qt.NoPen)
-                    p.drawEllipse(QPointF(*xy0), 2.6, 2.6)
-            box = v.sketch_box
-            if box:
-                pts = [v.project_one(c) for c in box['corners']]
-                if all(q is not None for q in pts):
-                    blue = QColor('#2f87e8')
-                    dash = QPen(blue, 1.6, Qt.DashLine)
-                    p.setPen(dash)
-                    p.setBrush(QColor(47, 135, 232, 24))
-                    p.drawPolygon(QPolygonF([QPointF(*q) for q in pts]))
-                    top, rot = v.project_one(box['top']), v.project_one(box['rotate'])
-                    if top is not None and rot is not None:
-                        p.setPen(QPen(blue, 1.6))
-                        p.drawLine(QPointF(*top), QPointF(*rot))
-                    mv, sc = v.project_one(box['move']), v.project_one(box['scale'])
-                    p.setPen(QPen(blue, 2))
-                    p.setBrush(QColor('#ffffff'))
-                    if sc is not None:
-                        p.drawRect(QRectF(sc[0] - 6, sc[1] - 6, 12, 12))
-                        p.drawLine(QPointF(sc[0] - 3, sc[1] + 3), QPointF(sc[0] + 3, sc[1] - 3))
-                    if rot is not None:
-                        p.drawEllipse(QPointF(*rot), 7.5, 7.5)
-                        p.drawArc(QRectF(rot[0] - 3.5, rot[1] - 3.5, 7, 7), 40 * 16, 270 * 16)
-                    if mv is not None:
-                        p.setBrush(blue)
-                        p.setPen(QPen(QColor('#ffffff'), 1.8))
-                        p.drawRoundedRect(QRectF(mv[0] - 8, mv[1] - 8, 16, 16), 4, 4)
-                        p.setPen(QPen(QColor('#ffffff'), 1.6, Qt.SolidLine, Qt.RoundCap))
-                        p.drawLine(QPointF(mv[0] - 5, mv[1]), QPointF(mv[0] + 5, mv[1]))
-                        p.drawLine(QPointF(mv[0], mv[1] - 5), QPointF(mv[0], mv[1] + 5))
             for g in v.sketch_grips:
                 xy = v.project_one(g)
                 if xy is None:
@@ -268,11 +230,9 @@ class Overlay2D(QWidget):
 class OverMesh(gl.GLMeshItem):
     """Półprzezroczysta nakładka na ścianę: przesunięta ku kamerze, więc nie ginie w z-fightingu z bryłą."""
 
-    offset = -2.0
-
     def paint(self):
         GL.glEnable(GL.GL_POLYGON_OFFSET_FILL)
-        GL.glPolygonOffset(self.offset, self.offset)
+        GL.glPolygonOffset(-2.0, -2.0)
         try:
             super().paint()
         finally:
@@ -347,17 +307,11 @@ class CadView(gl.GLViewWidget):
             self.addItem(grid)
             self.grid_items.append(grid)
         self.grid_item = self.grid_items[-1]
-        self.axis_defs = []
-        for direction, col in (((1, 0, 0), (.89, .31, .33, .95)), ((0, 1, 0), (.14, .64, .42, .95)), ((0, 0, 1), (.2, .5, .9, .95))):
-            direction = np.array(direction, float)
-            solid = gl.GLLinePlotItem(pos=np.array([(0, 0, 0), direction * 100], dtype=np.float32), color=col, width=2.4, antialias=True)
-            dashed = gl.GLLinePlotItem(pos=np.zeros((2, 3), dtype=np.float32), color=col, width=2.0, antialias=True, mode='lines')
-            self.addItem(solid)
-            self.addItem(dashed)
-            self.axis_defs.append((solid, dashed, direction))
-            self.axis_lines.append((solid, direction))
-            self.axis_lines.append((dashed, direction))
-        self._origin_visible = False
+        for pts, col in (([(-1000, 0, 0), (1000, 0, 0)], (.89, .31, .33, .85)), ([(0, -1000, 0), (0, 1000, 0)], (.14, .64, .42, .85)),
+                         ([(0, 0, 0), (0, 0, 1000)], (.2, .5, .9, .85))):
+            axis = gl.GLLinePlotItem(pos=np.array(pts, dtype=np.float32), color=col, width=2, antialias=True)
+            self.addItem(axis)
+            self.axis_lines.append((axis, np.array(pts[1], float) / 1000.0))
         self.custom_plane_items = []
         self.marker_items = []
         self.bodies = ()
@@ -392,7 +346,6 @@ class CadView(gl.GLViewWidget):
         self.snap_label = None
         self.sketch_centers = []
         self.sketch_grips = []
-        self.sketch_box = None
         self.drag_hook = None
         self._hook_active = False
         self.snap_marker = None       # ((x, y), etykieta) - przyciąganie jak w wersji HTML
@@ -577,21 +530,21 @@ class CadView(gl.GLViewWidget):
 
     # ---------- płaszczyzny (jak w HTML) ----------
     def _build_planes(self):
-        """Płaszczyzny podstawowe jak punkt początkowy w Fusion 360: trzy brzoskwiniowe, półprzezroczyste kwadraty wychodzące z początku układu."""
+        """Płaszczyzny podstawowe w stylu Fusion 360: małe, półprzezroczyste kwadraty z cienkim obrysem; rozmiar zależy od powiększenia."""
         corners = {
-            'XY': [(0, 0, 0), (1, 0, 0), (1, -1, 0), (0, -1, 0)],
-            'XZ': [(0, 0, 0), (1, 0, 0), (1, 0, 1), (0, 0, 1)],
-            'YZ': [(0, 0, 0), (0, -1, 0), (0, -1, 1), (0, 0, 1)],
+            'XY': [(-1, -1, 0), (1, -1, 0), (1, 1, 0), (-1, 1, 0)],
+            'XZ': [(-1, 0, -1), (1, 0, -1), (1, 0, 1), (-1, 0, 1)],
+            'YZ': [(0, -1, -1), (0, 1, -1), (0, 1, 1), (0, -1, 1)],
         }
         self._plane_corners = corners
         for name, pts in corners.items():
-            rgb = (.96, .62, .40)
-            fill = OverMesh(vertexes=np.array(pts, dtype=np.float32), faces=np.array([[0, 1, 2], [0, 2, 3]]),
-                            color=(*rgb, .22), smooth=False, drawEdges=False)
-            fill.offset = -1.0
+            color = pg.mkColor(PLANE_COLORS[name])
+            rgb = (color.redF(), color.greenF(), color.blueF())
+            fill = gl.GLMeshItem(vertexes=np.array(pts, dtype=np.float32), faces=np.array([[0, 1, 2], [0, 2, 3]]),
+                                 color=(*rgb, .10), smooth=False, drawEdges=False)
             fill.setGLOptions('translucent')
-            outline = gl.GLLinePlotItem(pos=np.array([*pts, pts[0]], dtype=np.float32), color=(.88, .50, .26, .95), width=1.6, antialias=True)
-            label = gl.GLTextItem(pos=np.array(pts[2], dtype=np.float32) * .85, text=name, color=QColor('#b8672f'))
+            outline = gl.GLLinePlotItem(pos=np.array([*pts, pts[0]], dtype=np.float32), color=(*rgb, .75), width=1.6, antialias=True)
+            label = gl.GLTextItem(pos=np.array(pts[2], dtype=np.float32) * .8, text=name, color=QColor(PLANE_COLORS[name]))
             self.plane_items[name] = (fill, outline, label, rgb)
         self._apply_plane_size()
 
@@ -602,21 +555,7 @@ class CadView(gl.GLViewWidget):
         for name, (fill, outline, label, rgb) in self.plane_items.items():
             fill.setTransform(m)
             outline.setTransform(m)
-            label.setData(pos=np.array(self._plane_corners[name][2], dtype=np.float32) * half * .85)
-        self._rebuild_axes()
-
-    def _rebuild_axes(self):
-        """Osie jak w Fusion 360: część dodatnia ciągła, ujemna kreskowana; długość i gęstość kresek zależą od rozmiaru płaszczyzn."""
-        half = self._plane_half
-        length = 30.0 * half
-        dash = half / 7.0
-        for solid, dashed, direction in getattr(self, 'axis_defs', ()):
-            solid.setData(pos=np.array([(0, 0, 0), direction * length], dtype=np.float32))
-            ts = np.arange(0.0, length, 2 * dash)
-            seg = np.empty((len(ts) * 2, 3), dtype=np.float32)
-            seg[0::2] = -np.outer(ts, direction)
-            seg[1::2] = -np.outer(ts + dash, direction)
-            dashed.setData(pos=seg)
+            label.setData(pos=np.array(self._plane_corners[name][2], dtype=np.float32) * half * .8)
 
     def show_planes(self, visible, only=None):
         for name, (fill, outline, label, rgb) in self.plane_items.items():
@@ -627,7 +566,6 @@ class CadView(gl.GLViewWidget):
                 elif not show and item in self.items:
                     self.removeItem(item)
         self._hover_plane = None
-        self._origin_visible = bool(visible and only is None)
         self.update()
 
     def _highlight_plane(self, name):
@@ -635,7 +573,7 @@ class CadView(gl.GLViewWidget):
             return
         self._hover_plane = name
         for key, (fill, outline, label, rgb) in self.plane_items.items():
-            fill.setColor((*rgb, .45 if key == name else .22))
+            fill.setColor((*rgb, .38 if key == name else .16))
         self.update()
 
     def _plane_hit(self, plane, x, y):
@@ -660,10 +598,8 @@ class CadView(gl.GLViewWidget):
                 continue
             hit = self._plane_hit(name, x, y)
             if hit:
-                p = np.asarray(hit[1], float)
-                eps = .03 * self._plane_half
-                h = self._plane_half
-                if (-eps <= p[0] <= h + eps and -h - eps <= p[1] <= eps and -eps <= p[2] <= h + eps) and (best is None or hit[0] < best[0]):
+                u, v = kernel.uv_of(name, hit[1])
+                if abs(u) <= self._plane_half and abs(v) <= self._plane_half and (best is None or hit[0] < best[0]):
                     best = (hit[0], name)
         return best[1] if best else None
 
@@ -781,7 +717,6 @@ class CadView(gl.GLViewWidget):
                 continue
             if len(mesh.triangles):
                 item = OverMesh(vertexes=mesh.vertices, faces=mesh.triangles, smooth=False, color=color, drawEdges=False)
-                item.offset = -4.0
                 item.setGLOptions('translucent')
                 self.addItem(item)
                 self.selection_items.append(item)
@@ -1043,8 +978,7 @@ class CadView(gl.GLViewWidget):
         self.custom_plane_items = []
         if frame is not None:
             pts = np.array([kernel.to_world(frame, u, v) for u, v in ((-half, -half), (half, -half), (half, half), (-half, half))], dtype=np.float32)
-            fill = OverMesh(vertexes=pts, faces=np.array([[0, 1, 2], [0, 2, 3]]), color=(*color, .14), smooth=False, drawEdges=False)
-            fill.offset = -1.0
+            fill = gl.GLMeshItem(vertexes=pts, faces=np.array([[0, 1, 2], [0, 2, 3]]), color=(*color, .14), smooth=False, drawEdges=False)
             fill.setGLOptions('translucent')
             outline = gl.GLLinePlotItem(pos=np.array([*pts, pts[0]], dtype=np.float32), color=(*color, .9), width=2, antialias=True)
             for item in (fill, outline):
