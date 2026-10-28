@@ -674,12 +674,7 @@ def _tolist(shapes):
 
 
 def _fromlist(lst):
-    from OCP.TopTools import TopTools_ListIteratorOfListOfShape
-    out, it = [], TopTools_ListIteratorOfListOfShape(lst)
-    while it.More():
-        out.append(it.Value())
-        it.Next()
-    return out
+    return [s for s in lst]
 
 
 def split_edges(edges):
