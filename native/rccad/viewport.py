@@ -113,35 +113,6 @@ class Overlay2D(QWidget):
                     p.setBrush(QColor('#8d9aa8'))
                     p.setPen(Qt.NoPen)
                     p.drawEllipse(QPointF(*xy0), 2.6, 2.6)
-            box = v.sketch_box
-            if box:
-                pts = [v.project_one(c) for c in box['corners']]
-                if all(q is not None for q in pts):
-                    blue = QColor('#2f87e8')
-                    dash = QPen(blue, 1.6, Qt.DashLine)
-                    p.setPen(dash)
-                    p.setBrush(QColor(47, 135, 232, 24))
-                    p.drawPolygon(QPolygonF([QPointF(*q) for q in pts]))
-                    top, rot = v.project_one(box['top']), v.project_one(box['rotate'])
-                    if top is not None and rot is not None:
-                        p.setPen(QPen(blue, 1.6))
-                        p.drawLine(QPointF(*top), QPointF(*rot))
-                    mv, sc = v.project_one(box['move']), v.project_one(box['scale'])
-                    p.setPen(QPen(blue, 2))
-                    p.setBrush(QColor('#ffffff'))
-                    if sc is not None:
-                        p.drawRect(QRectF(sc[0] - 6, sc[1] - 6, 12, 12))
-                        p.drawLine(QPointF(sc[0] - 3, sc[1] + 3), QPointF(sc[0] + 3, sc[1] - 3))
-                    if rot is not None:
-                        p.drawEllipse(QPointF(*rot), 7.5, 7.5)
-                        p.drawArc(QRectF(rot[0] - 3.5, rot[1] - 3.5, 7, 7), 40 * 16, 270 * 16)
-                    if mv is not None:
-                        p.setBrush(blue)
-                        p.setPen(QPen(QColor('#ffffff'), 1.8))
-                        p.drawRoundedRect(QRectF(mv[0] - 8, mv[1] - 8, 16, 16), 4, 4)
-                        p.setPen(QPen(QColor('#ffffff'), 1.6, Qt.SolidLine, Qt.RoundCap))
-                        p.drawLine(QPointF(mv[0] - 5, mv[1]), QPointF(mv[0] + 5, mv[1]))
-                        p.drawLine(QPointF(mv[0], mv[1] - 5), QPointF(mv[0], mv[1] + 5))
             for g in v.sketch_grips:
                 xy = v.project_one(g)
                 if xy is None:
@@ -392,7 +363,6 @@ class CadView(gl.GLViewWidget):
         self.snap_label = None
         self.sketch_centers = []
         self.sketch_grips = []
-        self.sketch_box = None
         self.drag_hook = None
         self._hook_active = False
         self.snap_marker = None       # ((x, y), etykieta) - przyciąganie jak w wersji HTML
