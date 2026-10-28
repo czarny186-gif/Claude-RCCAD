@@ -282,11 +282,15 @@ class StudioTests(unittest.TestCase):
     def test_file_menu_and_context_menu_open(self):
         from rccad import shell_ui as ui
         seen=[]
-        with patch.object(ui.PopupMenu,'popup_at',lambda menu,pos:seen.append(len(menu.findChildren(ui._Row)))):
+        with patch.object(ui.PopupMenu,'popup_at',lambda menu,pos:seen.append(('ctx',len(menu.actions)))),\
+             patch.object(ui.RichMenu,'popup_at',lambda menu,pos:seen.append(('rich',len(menu.actions)))):
             self.w.file_menu()
             a,b=self.make_solids()
             with patch.object(self.w.view,'pick_body',return_value=a.id):self.w.context_menu(5,5)
-        self.assertEqual(seen,[6,4])
+            self.w.tools['sketch'].click();self.w.plane_picked('XY')
+            for b in self.w.shape_bar.findChildren(__import__('PySide6.QtWidgets',fromlist=['QToolButton']).QToolButton):
+                if b.objectName()=='shapeExpand':b.click()
+        self.assertEqual(seen[:2],[('rich',6),('ctx',4)]);self.assertEqual([n for kind,n in seen[2:]],[3,4])
 
     def test_every_button_click_raises_no_exception(self):
         import sys
@@ -294,7 +298,7 @@ class StudioTests(unittest.TestCase):
         from rccad import shell_ui as ui
         errors=[];old=sys.excepthook;sys.excepthook=lambda *a:errors.append(a[1])
         try:
-            with patch.object(ui.PopupMenu,'popup_at',lambda *a:None):
+            with patch.object(ui.PopupMenu,'popup_at',lambda *a:None),patch.object(ui.RichMenu,'popup_at',lambda *a:None):
                 for key in ('file','sketch','extrude','bool','mod','mirror','mod','bool'):self.w.tools[key].click();self.app.processEvents()
                 self.w.tools['sketch'].click();self.w.plane_picked('XY')
                 for b in list(self.w.shape_buttons.values()):b.click();self.app.processEvents()

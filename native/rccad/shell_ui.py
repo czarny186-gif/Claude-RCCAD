@@ -82,6 +82,16 @@ QFrame#popup QPushButton:hover:enabled { background:#080808; color:#fff; }
 QFrame#popup QPushButton:disabled { color:#a9b6c4; }
 QFrame#popup QLabel { background:transparent; color:#29475e; font-size:13px; }
 QFrame#popup QLabel#hintlabel { font-size:11px; color:#8aa0b5; }
+QFrame#rich { background:#ffffff; border:1px solid #b9cde0; border-radius:15px; }
+QLabel#richhead { color:#7b93a8; font-size:10px; font-weight:700; letter-spacing:1px; padding:4px 8px 6px 8px; background:transparent; }
+QFrame#richsep { background:#e3ebf3; border:0; margin:4px 8px; }
+QPushButton#richrow { background:transparent; border:0; border-radius:10px; text-align:left; }
+QPushButton#richrow:hover:enabled { background:#e9f3ff; }
+QPushButton#richrow:disabled { background:transparent; }
+QLabel#richtile { background:#f1f6fb; border:1px solid #dbe6f0; border-radius:10px; }
+QPushButton#richrow:hover:enabled QLabel#richtile { background:#ffffff; border-color:#9ccbf6; }
+QLabel#richname { color:#1e3a52; font-size:13px; font-weight:600; background:transparent; }
+QLabel#richhint { color:#7890a5; font-size:11px; background:transparent; }
 QFrame#dimpanel { background:rgba(255,255,255,0.93); border:1px solid #b9cbdc; border-radius:11px; }
 QFrame#dimpanel QLabel { color:#344e69; font-size:12px; font-weight:600; background:transparent; }
 QFrame#dimpanel QLabel#help { color:#71869b; font-weight:400; }
@@ -318,3 +328,65 @@ class Segmented(QFrame):
         if index != self._index:
             self._index = index
             self.currentIndexChanged.emit(index)
+
+
+class RichMenu(QFrame):
+    """Graficzne menu: kafelek z ikoną + tytuł + opis w każdym wierszu, nagłówek i separatory (plik, warianty kształtów)."""
+
+    def __init__(self, parent, entries, title='', min_width=300):
+        super().__init__(parent, Qt.Popup | Qt.FramelessWindowHint)
+        self.setObjectName('rich')
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(8, 8, 8, 8)
+        lay.setSpacing(2)
+        self.setMinimumWidth(min_width)
+        if title:
+            head = QLabel(title.upper())
+            head.setObjectName('richhead')
+            lay.addWidget(head)
+        self.actions = []
+        for entry in entries:
+            if entry is None:
+                line = QFrame()
+                line.setObjectName('richsep')
+                line.setFixedHeight(1)
+                lay.addWidget(line)
+                continue
+            icon, text, hint, callback = entry[:4]
+            enabled = entry[4] if len(entry) > 4 else True
+            button = QPushButton()
+            button.setObjectName('richrow')
+            button.setEnabled(enabled)
+            button.setFixedHeight(54)
+            row = QHBoxLayout(button)
+            row.setContentsMargins(8, 4, 12, 4)
+            row.setSpacing(12)
+            tile = QLabel()
+            tile.setObjectName('richtile')
+            tile.setFixedSize(40, 40)
+            tile.setAlignment(Qt.AlignCenter)
+            tile.setPixmap(icon)
+            tile.setAttribute(Qt.WA_TransparentForMouseEvents)
+            row.addWidget(tile)
+            col = QVBoxLayout()
+            col.setSpacing(0)
+            col.setContentsMargins(0, 0, 0, 0)
+            name = QLabel(text)
+            name.setObjectName('richname')
+            name.setAttribute(Qt.WA_TransparentForMouseEvents)
+            col.addWidget(name)
+            if hint:
+                sub = QLabel(hint)
+                sub.setObjectName('richhint')
+                sub.setAttribute(Qt.WA_TransparentForMouseEvents)
+                col.addWidget(sub)
+            row.addLayout(col, 1)
+            button.clicked.connect(lambda _=False, cb=callback: (self.close(), cb()))
+            lay.addWidget(button)
+            self.actions.append((text, button))
+        shadow(self, 26, 8, 70)
+
+    def popup_at(self, global_pos):
+        self.adjustSize()
+        self.move(global_pos)
+        self.show()

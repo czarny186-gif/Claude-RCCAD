@@ -77,6 +77,34 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
         p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE)); p.drawRoundedRect(QRectF(8, 14, 28, 22), 3, 3)
         p.setPen(pen(ORANGE, 2.8)); p.drawLine(QPointF(30, 12), QPointF(42, 24))
         p.setBrush(QColor(ORANGE)); p.drawPolygon(QPolygonF([QPointF(28, 14), QPointF(26, 21), QPointF(34, 18)]))
+    elif kind in ('f_new', 'f_save', 'f_saveas', 'f_open', 'f_import', 'f_export'):
+        if kind == 'f_new':
+            page = QPainterPath(); page.moveTo(12, 6); page.lineTo(29, 6); page.lineTo(37, 14); page.lineTo(37, 42); page.lineTo(12, 42); page.closeSubpath()
+            fill(page, '#ffffff', INK)
+            p.setPen(pen(INK, 2)); p.drawPolyline(QPolygonF([QPointF(29, 6), QPointF(29, 14), QPointF(37, 14)]))
+            p.setPen(pen(BLUE, 3)); p.drawLine(QPointF(24.5, 22), QPointF(24.5, 36)); p.drawLine(QPointF(17.5, 29), QPointF(31.5, 29))
+        elif kind in ('f_save', 'f_saveas'):
+            body = QPainterPath(); body.moveTo(8, 8); body.lineTo(34, 8); body.lineTo(41, 15); body.lineTo(41, 41); body.lineTo(8, 41); body.closeSubpath()
+            fill(body, BLUE_SOFT, BLUE)
+            fill(_rounded(14, 8, 18, 10, 1.5), '#ffffff', BLUE)
+            fill(_rounded(13, 26, 22, 15, 2), '#ffffff', BLUE)
+            if kind == 'f_saveas':
+                p.setPen(pen(ORANGE, 3)); p.drawLine(QPointF(30, 44), QPointF(44, 30))
+                p.setBrush(QColor(ORANGE)); p.setPen(Qt.NoPen); p.drawPolygon(QPolygonF([QPointF(28, 46), QPointF(29, 40), QPointF(34, 45)]))
+        elif kind == 'f_open':
+            back = QPainterPath(); back.moveTo(5, 12); back.lineTo(18, 12); back.lineTo(22, 17); back.lineTo(40, 17); back.lineTo(40, 40); back.lineTo(5, 40); back.closeSubpath()
+            fill(back, BLUE_SOFT, BLUE)
+            front = QPainterPath(); front.moveTo(5, 40); front.lineTo(11, 23); front.lineTo(45, 23); front.lineTo(39, 40); front.closeSubpath()
+            fill(front, '#ffffff', BLUE)
+        else:
+            up = kind == 'f_export'
+            tray = QPainterPath(); tray.moveTo(7, 30); tray.lineTo(7, 41); tray.lineTo(41, 41); tray.lineTo(41, 30)
+            p.setBrush(Qt.NoBrush); p.setPen(pen(BLUE, 2.6)); p.drawPath(tray)
+            p.setPen(pen(ORANGE if up else GREEN, 3))
+            if up:
+                p.drawLine(QPointF(24, 32), QPointF(24, 8)); p.drawPolyline(QPolygonF([QPointF(15, 17), QPointF(24, 8), QPointF(33, 17)]))
+            else:
+                p.drawLine(QPointF(24, 8), QPointF(24, 32)); p.drawPolyline(QPolygonF([QPointF(15, 23), QPointF(24, 32), QPointF(33, 23)]))
     elif kind == 'check':
         p.setPen(pen('#ffffff', 4)); p.drawPolyline(QPolygonF([QPointF(11, 25), QPointF(21, 35), QPointF(38, 14)]))
     p.end()

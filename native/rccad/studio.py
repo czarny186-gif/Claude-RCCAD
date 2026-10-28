@@ -389,7 +389,7 @@ class StudioWindow(QMainWindow):
         variants: dict[str, list] = {}
         for item in shapes:
             if item['variant']:
-                variants.setdefault(item['group'], []).append(item['shape'])
+                variants.setdefault(item['group'], []).append(item)
         for item in shapes:
             if item['variant']:
                 continue
@@ -422,9 +422,17 @@ class StudioWindow(QMainWindow):
         self.shape_bar.adjustSize()
         self.shape_bar.hide()
 
-    def _variants_menu(self, names, anchor, main):
-        items = [(VARIANT_LABELS.get(n, n), '', lambda n=n: self.choose_tool(n, main), True) for n in names]
-        menu = ui.PopupMenu(self, items, min_width=164, row_height=33)
+    VARIANT_HINTS = {'rect': 'Przeciągnij przekątną', 'centerRect': 'Środek i narożnik', 'rect3': 'Podstawa i wysokość',
+                     'circle': 'Środek i punkt na okręgu', 'circleTangent2': 'Kliknij dwie linie i wielkość', 'circle2': 'Końce średnicy',
+                     'circle3': 'Trzy punkty na okręgu'}
+
+    def _variants_menu(self, items, anchor, main):
+        entries = []
+        for item in items:
+            name = item['shape']
+            icon = ui.svg_icon(ui.stroked_shape_svg(item['svg']), normal='#2f87e8', size=30).pixmap(30, 30)
+            entries.append((icon, VARIANT_LABELS.get(name, item['title']), self.VARIANT_HINTS.get(name, ''), lambda n=name: self.choose_tool(n, main)))
+        menu = ui.RichMenu(self, entries, 'Sposób rysowania', 290)
         self._popup = menu
         menu.popup_at(anchor.mapToGlobal(QPoint(anchor.width() + 8, 0)))
 
@@ -1970,10 +1978,16 @@ class StudioWindow(QMainWindow):
     # plik
     # =====================================================================
     def file_menu(self):
-        items = [('Nowy projekt', '', self.new_project, True), ('Zapisz projekt', 'Ctrl+S', self.save_project, True),
-                 ('Zapisz jako…', '', lambda: self.save_project(True), True), ('Otwórz projekt…', '', self.open_project, True),
-                 ('Importuj…', 'STEP STL DXF SVG', self.import_model, True), ('Eksportuj…', 'STEP STL', self.export_model, True)]
-        menu = ui.PopupMenu(self, items, min_width=210)
+        px = lambda kind: ui.icons.pixmap(kind, 34)
+        entries = [(px('f_new'), 'Nowy projekt', 'Czysta przestrzeń robocza  ·  Ctrl+N', self.new_project),
+                   (px('f_open'), 'Otwórz projekt…', 'Plik .rccadx  ·  Ctrl+O', self.open_project),
+                   None,
+                   (px('f_save'), 'Zapisz projekt', 'Zapis w bieżącym pliku  ·  Ctrl+S', self.save_project),
+                   (px('f_saveas'), 'Zapisz jako…', 'Zapis pod nową nazwą', lambda: self.save_project(True)),
+                   None,
+                   (px('f_import'), 'Importuj…', 'STEP · STL · BREP · DXF · SVG', self.import_model),
+                   (px('f_export'), 'Eksportuj…', 'STEP · STL · BREP · DXF', self.export_model)]
+        menu = ui.RichMenu(self, entries, 'Plik', 330)
         self._popup = menu
         button = self.tools['file']
         menu.popup_at(button.mapToGlobal(QPoint(0, button.height() + 10)))
