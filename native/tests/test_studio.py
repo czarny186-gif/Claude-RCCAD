@@ -296,6 +296,16 @@ class StudioTests(unittest.TestCase):
             if not item['variant']:self.assertFalse(ui.style_icon('s_'+item['shape'],28).isNull(),item['shape'])
         m=ui.RichMenu(self.w,[(ui.icons.pixmap('f_new',34),'A','b',lambda:None)],'T',300);self.assertEqual(m.card.objectName(),'rich');m.close()
 
+    def test_tool_toggle_select_and_drag_resize(self):
+        w=self.w;self.sketch('rect',(0,0),(20,10))
+        w._tool_clicked('rect');self.assertIsNone(w.tool);self.assertFalse(any(b.isChecked() for b in w.shape_buttons.values()))
+        w.view.update();a=w.view.project_one((20,5,0));self.assertTrue(w.view.drag_hook('press',*a))
+        self.assertEqual(w.selected,[w.document.bodies[-1].id]);self.assertEqual(len(w.view.sketch_grips),8)
+        w.view.drag_hook('move',*w.view.project_one((30,5,0)));w.view.drag_hook('release',*w.view.project_one((30,5,0)));self.wait()
+        b=k.bounds(w.document.bodies[-1].shape);self.assertAlmostEqual(b.xlen,30,1);self.assertAlmostEqual(b.ylen,10,1)
+        w._tool_clicked('circle');self.assertEqual(w.tool,'circle');self.assertEqual(w.selected,[])
+        w._tool_clicked('circle');self.assertIsNone(w.tool)
+
     def test_cube_button_picks_sketch_plane_and_grid_adapts(self):
         w=self.w;w.set_mode('plane');w._cube_clicked('X');self.assertEqual((w.mode,w.sketch_plane),('sketch','YZ'))
         w.view.opts['distance']=400;w.view.update();far=w.view._grid_key[0]

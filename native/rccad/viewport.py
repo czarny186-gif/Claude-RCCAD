@@ -104,6 +104,13 @@ class Overlay2D(QWidget):
                 p.drawEllipse(QPointF(*xy), 4.5, 4.5)
                 p.drawLine(QPointF(xy[0] - 9, xy[1]), QPointF(xy[0] + 9, xy[1]))
                 p.drawLine(QPointF(xy[0], xy[1] - 9), QPointF(xy[0], xy[1] + 9))
+            for g in v.sketch_grips:
+                xy = v.project_one(g)
+                if xy is None:
+                    continue
+                p.setPen(QPen(QColor('#2f87e8'), 1.8))
+                p.setBrush(QColor('#ffffff'))
+                p.drawRect(QRectF(xy[0] - 4.5, xy[1] - 4.5, 9, 9))
             order = {'plane': 0, 'ring': 1, 'axis': 2, 'arrow': 3}
             for h in sorted(v.handles, key=lambda h: order.get(h.get('kind', 'arrow'), 3)):
                 hot = v.hover_handle == h['id'] or (v._handle_drag is not None and v._handle_drag['id'] == h['id'])
@@ -338,6 +345,9 @@ class CadView(gl.GLViewWidget):
         self._handle_drag = None
         self.snap_label = None
         self.sketch_centers = []
+        self.sketch_grips = []
+        self.drag_hook = None
+        self._hook_active = False
         self.snap_marker = None       # ((x, y), etykieta) - przyciąganie jak w wersji HTML
         self.hover_handle = None
         self.free_drag = None         # (id bryły, środek): przeciąganie bryły lewym przyciskiem po płaszczyźnie najbardziej zwróconej do kamery
@@ -1007,10 +1017,10 @@ class CadView(gl.GLViewWidget):
         xy = np.column_stack(((ndc[:, 0] + 1) * self.width() / 2, (1 - ndc[:, 1]) * self.height() / 2))
         return xy, ndc[:, 2], w
 
-    def nearest_edge(self, x, y, solids_only=False):
+    def nearest_edge(self, x, y, solids_only=False, kinds=None):
         best, distance = None, 10.
         for body in self.bodies:
-            if not body.visible or not body.mesh or (solids_only and body.kind != 'solid'):
+            if not body.visible or not body.mesh or (solids_only and body.kind != 'solid') or (kinds and body.kind not in kinds):
                 continue
             for index, points in body.mesh.edges.items():
                 xy, z, w = self.project_points(points)
@@ -1078,6 +1088,10 @@ class CadView(gl.GLViewWidget):
     def mouseMoveEvent(self, event):
         pos = event.position()
         buttons = event.buttons()
+        if self._hook_active:
+            self.drag_hook('move', pos.x(), pos.y())
+            event.accept()
+            return
         if self._handle_drag is not None:
             self._drag_to(self._handle_drag, pos.x(), pos.y())
             event.accept()
@@ -1147,6 +1161,12 @@ class CadView(gl.GLViewWidget):
     def mousePressEvent(self, event):
         self._drag_position = event.position()
         self._press = (event.position().x(), event.position().y(), event.button())
+        if self.drag_hook is not None and event.button() == Qt.LeftButton and not event.modifiers() & Qt.ShiftModifier:
+            if self.drag_hook('press', event.position().x(), event.position().y()):
+                self._hook_active = True
+                self._press = None
+                event.accept()
+                return
         if (not self.click_mode and self.sketch_plane and self.sketch_tool and event.button() == Qt.LeftButton
                 and not event.modifiers() & Qt.ShiftModifier):
             point = self.plane_point(self.sketch_plane, event.position().x(), event.position().y())
@@ -1186,6 +1206,11 @@ class CadView(gl.GLViewWidget):
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event):
+        if self._hook_active:
+            self._hook_active = False
+            self.drag_hook('release', event.position().x(), event.position().y())
+            event.accept()
+            return
         if self._handle_drag is not None:
             hid = self._handle_drag['id']
             self._handle_drag = None
