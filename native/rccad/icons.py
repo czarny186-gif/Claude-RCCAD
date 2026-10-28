@@ -1,0 +1,102 @@
+"""Ikony operacji rysowane wektorowo (QPainter) — kolorowe, czytelne piktogramy w panelach narzędzi."""
+from __future__ import annotations
+from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
+
+BLUE = '#2f87e8'
+BLUE_SOFT = '#cfe4fb'
+ORANGE = '#f09a22'
+GREEN = '#2fa56d'
+RED = '#e5484d'
+INK = '#40586f'
+PALE = '#e6edf5'
+
+
+def _rounded(x, y, w, h, r=4):
+    path = QPainterPath()
+    path.addRoundedRect(QRectF(x, y, w, h), r, r)
+    return path
+
+
+def _circle(cx, cy, r):
+    path = QPainterPath()
+    path.addEllipse(QPointF(cx, cy), r, r)
+    return path
+
+
+def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
+    S = 48.0
+    pm = QPixmap(size * scale, size * scale)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.scale(size * scale / S, size * scale / S)
+    pen = lambda c, w=2.2: QPen(QColor(c), w, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+    fill = lambda path, c, edge=INK: (p.setBrush(QColor(c)), p.setPen(pen(edge)), p.drawPath(path))
+    a, b = _rounded(7, 11, 24, 24), _rounded(17, 17, 24, 24)
+    ca, cb = _circle(19, 24, 12), _circle(30, 24, 12)
+    if kind == 'new':
+        fill(_rounded(9, 13, 26, 26), BLUE_SOFT, BLUE)
+        p.setPen(pen(BLUE, 2.6)); p.drawLine(QPointF(38, 8), QPointF(38, 22)); p.drawLine(QPointF(31, 15), QPointF(45, 15))
+    elif kind in ('join', 'union'):
+        path = (ca.united(cb)) if kind == 'union' else (a.united(b))
+        fill(path, BLUE_SOFT, BLUE)
+    elif kind in ('cut', 'subtract'):
+        base, tool = (a, b) if kind == 'cut' else (ca, cb)
+        fill(base.subtracted(tool), BLUE_SOFT, BLUE)
+        p.setBrush(Qt.NoBrush); pn = pen(ORANGE, 1.8); pn.setStyle(Qt.DashLine); p.setPen(pn); p.drawPath(tool)
+    elif kind in ('intersect', 'common'):
+        base, tool = (a, b) if kind == 'intersect' else (ca, cb)
+        p.setBrush(Qt.NoBrush); p.setPen(pen('#9fb4c8', 1.8)); p.drawPath(base); p.drawPath(tool)
+        fill(base.intersected(tool), BLUE, BLUE)
+    elif kind in ('one', 'sym', 'two'):
+        fill(_rounded(15, 20, 18, 8, 2), BLUE_SOFT, BLUE)
+        p.setPen(pen(ORANGE, 2.6))
+        if kind in ('one', 'sym', 'two'):
+            p.drawLine(QPointF(24, 20), QPointF(24, 6)); p.drawPolyline(QPolygonF([QPointF(19, 11), QPointF(24, 5), QPointF(29, 11)]))
+        if kind in ('sym', 'two'):
+            p.setPen(pen(BLUE if kind == 'two' else ORANGE, 2.6))
+            p.drawLine(QPointF(24, 28), QPointF(24, 42)); p.drawPolyline(QPolygonF([QPointF(19, 37), QPointF(24, 43), QPointF(29, 37)]))
+    elif kind == 'fillet':
+        path = QPainterPath(); path.moveTo(10, 8); path.lineTo(10, 40); path.lineTo(38, 40); path.lineTo(38, 30)
+        path.lineTo(28, 30); path.quadTo(20, 30, 20, 22); path.lineTo(20, 8); path.closeSubpath()
+        fill(path, BLUE_SOFT, BLUE)
+        p.setBrush(Qt.NoBrush); p.setPen(pen(GREEN, 2.4)); p.drawArc(QRectF(12, 22, 16, 16), 90 * 16, 90 * 16)
+    elif kind == 'chamfer':
+        path = QPainterPath(); path.moveTo(10, 8); path.lineTo(10, 40); path.lineTo(38, 40); path.lineTo(38, 30)
+        path.lineTo(30, 30); path.lineTo(20, 22); path.lineTo(20, 8); path.closeSubpath()
+        fill(path, BLUE_SOFT, BLUE)
+        p.setPen(pen(ORANGE, 2.4)); p.drawLine(QPointF(20, 22), QPointF(30, 30))
+    elif kind == 'mirror':
+        tri = QPolygonF([QPointF(8, 38), QPointF(8, 10), QPointF(21, 38)])
+        mir = QPolygonF([QPointF(40, 38), QPointF(40, 10), QPointF(27, 38)])
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE)); p.drawPolygon(tri)
+        p.setBrush(QColor('#d6f1e3')); p.setPen(pen(GREEN)); p.drawPolygon(mir)
+        pn = pen(ORANGE, 2); pn.setStyle(Qt.DashLine); p.setPen(pn); p.drawLine(QPointF(24, 5), QPointF(24, 43))
+    elif kind == 'sketch':
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE)); p.drawRoundedRect(QRectF(8, 14, 28, 22), 3, 3)
+        p.setPen(pen(ORANGE, 2.8)); p.drawLine(QPointF(30, 12), QPointF(42, 24))
+        p.setBrush(QColor(ORANGE)); p.drawPolygon(QPolygonF([QPointF(28, 14), QPointF(26, 21), QPointF(34, 18)]))
+    elif kind == 'check':
+        p.setPen(pen('#ffffff', 4)); p.drawPolyline(QPolygonF([QPointF(11, 25), QPointF(21, 35), QPointF(38, 14)]))
+    p.end()
+    pm.setDevicePixelRatio(scale)
+    return pm
+
+
+def badge(kind: str, color: str = BLUE, size: int = 34) -> QPixmap:
+    """Okrągła plakietka z ikoną (nagłówek panelu)."""
+    scale = 2
+    pm = QPixmap(size * scale, size * scale)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setBrush(QColor(color)); p.setPen(Qt.NoPen)
+    p.drawRoundedRect(QRectF(0, 0, size * scale, size * scale), 10 * scale, 10 * scale)
+    p.end()
+    inner = pixmap(kind, size - 6, scale)
+    q = QPainter(pm)
+    q.drawPixmap(3 * scale, 3 * scale, inner)
+    q.end()
+    pm.setDevicePixelRatio(scale)
+    return pm

@@ -44,7 +44,19 @@ QToolButton#cubeX:checked, QToolButton#cubeY:checked, QToolButton#cubeZ:checked,
 QFrame#floating { background:rgba(255,255,255,0.94); border:1px solid #d0dce8; border-radius:13px; }
 QFrame#bar { background:rgba(255,255,255,0.93); border:1px solid #bdccdb; border-radius:13px; }
 QFrame#toolbar { background:rgba(255,255,255,0.92); border:1px solid #cbd9e6; border-radius:12px; }
-QFrame#panel { background:rgba(255,255,255,0.95); border:1px solid #b2c7db; border-radius:11px; }
+QFrame#panel { background:rgba(255,255,255,0.97); border:1px solid #b9cde0; border-radius:15px; }
+QLabel#ptitle { font-size:13px; font-weight:700; color:#1e3a52; background:transparent; }
+QLabel#psub { font-size:11px; color:#6c869b; background:transparent; }
+QLabel#badge { background:transparent; }
+QFrame#seg { background:transparent; }
+QToolButton#segbtn { background:#f3f8fd; border:1px solid #d3e0ec; border-radius:10px; color:#41596f; font-size:11px; padding:7px 2px 4px 2px; }
+QToolButton#segbtn:hover { background:#eaf4ff; border-color:#8fc0f2; }
+QToolButton#segbtn:checked { background:#e3f0ff; border:2px solid #2f87e8; color:#14508f; font-weight:700; }
+QFrame#panel QPushButton#primary, QFrame#bar QPushButton#primary, QFrame#skbar QPushButton#primary { background:#2f87e8; border:1px solid #2379d6; color:#fff; font-weight:700; border-radius:8px; padding:8px 14px; }
+QFrame#panel QPushButton#primary:hover, QFrame#bar QPushButton#primary:hover, QFrame#skbar QPushButton#primary:hover { background:#1f6fc9; border-color:#1f6fc9; color:#fff; }
+QFrame#skbar { background:rgba(255,255,255,0.97); border:1px solid #b9cde0; border-radius:15px; }
+QFrame#skbar QLabel { background:transparent; color:#1e3a52; font-size:12px; }
+QFrame#skbar QPushButton { background:#f5f9fd; border:1px solid #a8bfd3; border-radius:8px; padding:8px 14px; color:#29475e; font-size:12px; }
 QFrame#panel QLabel, QFrame#bar QLabel { color:#29475e; font-size:12px; background:transparent; border:0; }
 QFrame#panel QLabel#title { font-size:12px; font-weight:700; }
 QFrame#panel QLabel#label { font-weight:600; }
@@ -232,3 +244,77 @@ class PopupMenu(QFrame):
         self.adjustSize()
         self.move(global_pos)
         self.show()
+
+
+# ---------- panele narzędzi: nagłówek z plakietką i przełączniki graficzne ----------
+from PySide6.QtCore import Signal
+from . import icons
+
+
+def panel_header(kind: str, title: str, subtitle: str = '', color: str = icons.BLUE) -> QWidget:
+    box = QWidget()
+    box.setObjectName('phead')
+    lay = QHBoxLayout(box)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(10)
+    pic = QLabel()
+    pic.setObjectName('badge')
+    pic.setPixmap(icons.badge(kind, color, 36))
+    pic.setFixedSize(36, 36)
+    lay.addWidget(pic)
+    col = QVBoxLayout()
+    col.setSpacing(0)
+    head = QLabel(title)
+    head.setObjectName('ptitle')
+    col.addWidget(head)
+    if subtitle:
+        sub = QLabel(subtitle)
+        sub.setObjectName('psub')
+        col.addWidget(sub)
+    lay.addLayout(col, 1)
+    return box
+
+
+class Segmented(QFrame):
+    """Graficzny wybór jednej opcji (ikona + podpis). API zbliżone do QComboBox: currentData / currentIndex / setCurrentIndex."""
+    currentIndexChanged = Signal(int)
+
+    def __init__(self, items, icon_size=34, parent=None):
+        super().__init__(parent)
+        self.setObjectName('seg')
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        self._data, self._buttons, self._index = [], [], 0
+        for i, (label, data, kind) in enumerate(items):
+            button = QToolButton()
+            button.setObjectName('segbtn')
+            button.setCheckable(True)
+            button.setText(label)
+            button.setIcon(QIcon(icons.pixmap(kind, icon_size)))
+            button.setIconSize(QSize(icon_size, icon_size))
+            button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+            button.setMinimumHeight(icon_size + 30)
+            button.setSizePolicy(button.sizePolicy().horizontalPolicy(), button.sizePolicy().verticalPolicy())
+            button.clicked.connect(lambda _=False, n=i: self.setCurrentIndex(n))
+            lay.addWidget(button, 1)
+            self._buttons.append(button)
+            self._data.append(data)
+        self._buttons[0].setChecked(True)
+
+    def currentIndex(self):
+        return self._index
+
+    def currentData(self):
+        return self._data[self._index]
+
+    def count(self):
+        return len(self._data)
+
+    def setCurrentIndex(self, index):
+        index = max(0, min(index, len(self._data) - 1))
+        for i, b in enumerate(self._buttons):
+            b.setChecked(i == index)
+        if index != self._index:
+            self._index = index
+            self.currentIndexChanged.emit(index)

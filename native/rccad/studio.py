@@ -5,12 +5,14 @@ from dataclasses import replace
 from pathlib import Path
 import numpy as np
 from PySide6.QtCore import QEvent, QObject, QPoint, QRunnable, QSize, Qt, QThreadPool, QTimer, Signal
-from PySide6.QtGui import QCursor, QKeySequence, QShortcut
+from PySide6.QtGui import QCursor, QKeySequence, QMatrix4x4, QShortcut
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
                                QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QToolButton, QVBoxLayout, QWidget)
 from . import kernel
 from . import shell_ui as ui
 from . import snap as snapping
+icons_green = '#2fa56d'
+icons_orange = '#f09a22'
 from .document import Body, Document
 from .viewport import CadView
 
@@ -139,6 +141,7 @@ class StudioWindow(QMainWindow):
         self.override: dict[str, Body] = {}
         self.t_target = None
         self.t_center = np.zeros(3)
+        self.t_mass = np.zeros(3)
         self.t_radius = 10.0
         self.clipboard: list[tuple] = []
         self._hover_key = None
@@ -146,6 +149,8 @@ class StudioWindow(QMainWindow):
         self._popup = None
         self._planes_visible = True
         self._pv = {}
+        self._region_cache = {}
+        self._trim_cache = None
         self._snap_cache = None
         self.resize(1400, 850)
         self.setStyleSheet(ui.style())
@@ -180,17 +185,15 @@ class StudioWindow(QMainWindow):
     # =====================================================================
     # budowa interfejsu (wymiary i kolory z CSS wersji HTML)
     # =====================================================================
-    def _panel(self, width, title):
+    def _panel(self, width, title, kind='sketch', subtitle='', color=None):
         frame = QFrame(self.view)
         frame.setObjectName('panel')
         frame.setFixedWidth(width)
         lay = QVBoxLayout(frame)
-        lay.setContentsMargins(13, 13, 13, 13)
-        lay.setSpacing(10)
-        head = QLabel(title)
-        head.setObjectName('title')
-        lay.addWidget(head)
-        ui.shadow(frame)
+        lay.setContentsMargins(16, 15, 16, 15)
+        lay.setSpacing(11)
+        lay.addWidget(ui.panel_header(kind, title, subtitle, color or ui.icons.BLUE))
+        ui.shadow(frame, 26, 7, 46)
         frame.hide()
         return frame, lay
 
@@ -205,6 +208,7 @@ class StudioWindow(QMainWindow):
         row = QHBoxLayout()
         row.setSpacing(6)
         a, b = QPushButton(first), QPushButton(second)
+        a.setObjectName('primary')
         a.clicked.connect(lambda _=False: on_first())
         b.clicked.connect(lambda _=False: on_second())
         row.addWidget(a)
@@ -319,11 +323,32 @@ class StudioWindow(QMainWindow):
             self.t_spins.append(spin)
         for text, cb in (('Zastosuj', self.apply_transform), ('Anuluj', lambda: self.set_mode(None))):
             b = QPushButton(text)
+            b.setObjectName('primary' if text == 'Zastosuj' else 'ghost')
             b.clicked.connect(lambda _=False, f=cb: f())
             tl.addWidget(b)
         ui.shadow(self.t_editor, 20, 5, 45)
         self.t_editor.hide()
         self.t_editor.adjustSize()
+
+        # pasek szkicu (jak 'Finish Sketch' w Fusion 360)
+        self.sk_bar = QFrame(v)
+        self.sk_bar.setObjectName('skbar')
+        sl = QHBoxLayout(self.sk_bar)
+        sl.setContentsMargins(12, 9, 12, 9)
+        sl.setSpacing(10)
+        self.sk_badge = QLabel()
+        self.sk_badge.setPixmap(ui.icons.badge('sketch', ui.icons.BLUE, 34))
+        self.sk_title = QLabel('Szkic')
+        self.sk_title.setStyleSheet('font-weight:700;font-size:13px;')
+        self.sk_hint = QLabel('')
+        self.sk_hint.setStyleSheet('color:#6c869b;')
+        finish = QPushButton('✓  Zakończ szkic')
+        finish.setObjectName('primary')
+        finish.clicked.connect(lambda _=False: self.set_mode(None))
+        for w in (self.sk_badge, self.sk_title, self.sk_hint, finish):
+            sl.addWidget(w)
+        ui.shadow(self.sk_bar, 22, 6, 44)
+        self.sk_bar.hide()
 
         self.origin_label = QLabel(v)
         self.origin_label.setObjectName('origin')
@@ -431,15 +456,11 @@ class StudioWindow(QMainWindow):
 
     def _build_panels(self):
         # --- wyciągnięcie: panel opcji + górny pasek ---
-        self.ex_panel, lay = self._panel(195, 'WYCIĄGNIĘCIE')
+        self.ex_panel, lay = self._panel(312, 'Wyciągnięcie', 'extrude' if False else 'one', 'Profil lub ściana → bryła')
         lay.setSpacing(11)
-        self.ex_op = QComboBox()
-        for label, key in (('Nowa bryła', 'new'), ('Połącz', 'join'), ('Wytnij', 'cut'), ('Część wspólna', 'intersect')):
-            self.ex_op.addItem(label, key)
+        self.ex_op = ui.Segmented([('Nowa', 'new', 'new'), ('Połącz', 'join', 'join'), ('Wytnij', 'cut', 'cut'), ('Wspólna', 'intersect', 'intersect')], 32)
         self._field(lay, 'Operacja', self.ex_op)
-        self.ex_dir = QComboBox()
-        for label, key in (('W jedną stronę', 'one'), ('Symetrycznie w dwie strony', 'symmetric'), ('Dwie strony niezależnie', 'two')):
-            self.ex_dir.addItem(label, key)
+        self.ex_dir = ui.Segmented([('Jedna strona', 'one', 'one'), ('Symetrycznie', 'symmetric', 'sym'), ('Dwie strony', 'two', 'two')], 32)
         self._field(lay, 'Kierunek', self.ex_dir)
         lay.addWidget(_label('Shift + klik: wybierz kilka profili. Enter zatwierdza operację.', 'small'))
         self.ex_status = _label('Kliknij zamknięty profil szkicu lub płaską ścianę bryły.', 'status')
@@ -463,6 +484,7 @@ class StudioWindow(QMainWindow):
         bar.addWidget(self.ex_second)
         for text, cb in (('Zastosuj', self.apply_extrude), ('Anuluj', lambda: self.set_mode(None))):
             b = QPushButton(text)
+            b.setObjectName('primary' if text == 'Zastosuj' else 'ghost')
             b.clicked.connect(lambda _=False, f=cb: f())
             bar.addWidget(b)
         ui.shadow(self.ex_bar, 24, 7, 64)
@@ -475,10 +497,8 @@ class StudioWindow(QMainWindow):
         self.ex_second.hide()
 
         # --- boolean ---
-        self.bool_panel, lay = self._panel(250, 'BOOLEAN / CSG')
-        self.bool_op = QComboBox()
-        for label, key in (('Suma (Połącz)', 'union'), ('Różnica (Wytnij narzędziem)', 'subtract'), ('Część wspólna', 'intersect')):
-            self.bool_op.addItem(label, key)
+        self.bool_panel, lay = self._panel(312, 'Boolean / CSG', 'union', 'Łączenie, odejmowanie, część wspólna', icons_green)
+        self.bool_op = ui.Segmented([('Suma', 'union', 'union'), ('Różnica', 'subtract', 'subtract'), ('Część wspólna', 'intersect', 'common')], 36)
         self._field(lay, 'Operacja', self.bool_op)
         self.bool_status = _label('', 'status')
         lay.addWidget(self.bool_status)
@@ -490,10 +510,8 @@ class StudioWindow(QMainWindow):
         self.bool_op.currentIndexChanged.connect(lambda *_: self._timers['bool'].start())
 
         # --- edytuj bryłę ---
-        self.mod_panel, lay = self._panel(262, 'EDYTUJ BRYŁĘ')
-        self.mod_kind = QComboBox()
-        self.mod_kind.addItem('Zaokrąglij krawędź', 'fillet')
-        self.mod_kind.addItem('Fazuj krawędź', 'chamfer')
+        self.mod_panel, lay = self._panel(312, 'Edytuj bryłę', 'fillet', 'Zaokrąglenie i fazowanie krawędzi', icons_orange)
+        self.mod_kind = ui.Segmented([('Zaokrąglij', 'fillet', 'fillet'), ('Fazuj', 'chamfer', 'chamfer')], 36)
         self._field(lay, 'Operacja', self.mod_kind)
         self.mod_label = _label('Promień zaokrąglenia (mm)')
         self.mod_size = _spin(3, .01, 1e5, 3, .5)
@@ -509,7 +527,7 @@ class StudioWindow(QMainWindow):
         self.mod_kind.currentIndexChanged.connect(self._mod_kind_changed)
 
         # --- odbicie lustrzane ---
-        self.mir_panel, lay = self._panel(262, 'ODBICIE LUSTRZANE')
+        self.mir_panel, lay = self._panel(312, 'Odbicie lustrzane', 'mirror', 'Obiekt → ściana-lustro', icons_green)
         self.mir_status = _label('', 'status')
         lay.addWidget(self.mir_status)
         self.mir_keep = QCheckBox('Zachowaj oryginał (kopia)')
@@ -527,7 +545,7 @@ class StudioWindow(QMainWindow):
         self.mir_join.toggled.connect(lambda *_: self._timers['mirror'].start())
 
         # --- tekst ---
-        self.text_panel, lay = self._panel(270, 'TEKST')
+        self.text_panel, lay = self._panel(300, 'Tekst', 'sketch', 'Kontury liter jako profile')
         self.text_edit = QPlainTextEdit('Tekst')
         self.text_edit.setFixedHeight(54)
         self._field(lay, 'Treść', self.text_edit)
@@ -574,6 +592,8 @@ class StudioWindow(QMainWindow):
         self.pad.move((W - self.pad.width()) // 2, H - 113 - self.pad.height())
         self.t_editor.adjustSize()
         self.t_editor.move(max(10, (W - self.t_editor.width()) // 2), H - 166 - self.t_editor.height())
+        self.sk_bar.adjustSize()
+        self.sk_bar.move(max(400, (W - self.sk_bar.width()) // 2), 18)
         self.origin_label.adjustSize()
         self.origin_label.move(W - 18 - self.origin_label.width(), H - 15 - self.origin_label.height())
         self.notice.adjustSize()
@@ -586,9 +606,9 @@ class StudioWindow(QMainWindow):
         self.ex_panel.adjustSize()
         self.ex_panel.move(18, 170)
         self.ex_bar.adjustSize()
-        self.ex_bar.move(230, 170)
+        self.ex_bar.move(346, 170)
         for w in (*self.tools.values(), self.shape_bar, self.undo_button, self.redo_button, self.layers, self.home, self.cube, self.pad,
-                  self.t_editor, self.origin_label, *self.panels, self.dim_panel, self.dim, self.notice):
+                  self.t_editor, self.sk_bar, self.origin_label, *self.panels, self.dim_panel, self.dim, self.notice):
             w.raise_()
 
     def eventFilter(self, obj, event):
@@ -624,7 +644,15 @@ class StudioWindow(QMainWindow):
         for key, button in self.cube_buttons.items():
             button.setChecked(key == name)
 
+    CUBE_PLANES = {'Z': 'XY', '-Z': 'XY', 'X': 'YZ', '-X': 'YZ', 'Y': 'XZ', '-Y': 'XZ'}
+
     def _cube_clicked(self, name):
+        if self.mode in ('plane', 'sketch') and name in self.CUBE_PLANES and not self.busy:
+            # w trybie szkicu ściana kostki wybiera płaszczyznę szkicu (kamera patrzy na nią z wybranej strony)
+            self.enter_sketch(self.CUBE_PLANES[name])
+            self.view.set_view(name)
+            self._mark_view(name)
+            return
         self.view.set_view(name)
         self._mark_view(name)
 
@@ -648,6 +676,7 @@ class StudioWindow(QMainWindow):
         if self.busy:
             return
         self.override = {}
+        self.view.clear_body_matrices()
         self.cancel_previews()
         self.view.snapper = None
         self.mode = mode
@@ -679,7 +708,7 @@ class StudioWindow(QMainWindow):
                 button.setChecked(key == ('sketch' if mode == 'plane' else mode))
         for key, button in self.pad_buttons.items():
             button.setChecked(key == mode)
-        for p in (self.shape_bar, self.t_editor, *self.panels):
+        for p in (self.shape_bar, self.t_editor, self.sk_bar, *self.panels):
             p.hide()
         self.view.show_planes(self._planes_visible)
         self.view.setCursor(Qt.ArrowCursor)
@@ -780,8 +809,12 @@ class StudioWindow(QMainWindow):
         self.view.look_along(plane)
         self.view.set_grid_frame(plane)
         self._mark_view(None)
-        self.view.setCursor(Qt.CrossCursor)
+        self.view.setCursor(Qt.ArrowCursor)
         self.points = []
+        self.shape_bar.show()
+        self.sk_bar.show()
+        self.sk_title.setText(f'Szkic · płaszczyzna {self._plane_label()}')
+        self.sk_hint.setText('Rysuj na płaszczyźnie; Esc kończy kształt')
         self.set_origin_text(f'Szkic · płaszczyzna {self._plane_label()}')
         self.choose_tool(self.tool)
 
@@ -837,6 +870,9 @@ class StudioWindow(QMainWindow):
         self.last_uv = (u, v)
         drawing = bool(self.points) or (self.tool == 'circleTangent2' and bool(self.tangent_lines))
         self.view.set_marker(kernel.to_world(self.sketch_plane, u, v), label=self.view.snap_label)
+        if self.tool == 'trim':
+            self.trim_preview()
+            return
         if self.tool == 'circleTangent2':
             if len(self.tangent_lines) == 2:
                 try:
@@ -974,23 +1010,52 @@ class StudioWindow(QMainWindow):
         if self.mode != 'sketch':
             self.selected = [b.id for b in bodies]
 
-    def trim_at_cursor(self):
-        hit = self._cursor_edge()
+    def _trim_target(self):
+        """Szkic i kawałek jego krawędzi (między przecięciami z innymi szkicami) najbliższy kursorowi."""
+        pos = self.view.mapFromGlobal(QCursor.pos())
+        hit = self.view.nearest_edge(pos.x(), pos.y())
         body = self.document.get(hit[0]) if hit else None
         if body is None or body.kind != 'sketch':
+            return None
+        key = self._plane_key(body.plane)
+        plane, bodies = self._drawn_sketches().get(key, (None, []))
+        if body not in bodies:
+            return None
+        sig = (key, tuple((b.id, id(b.shape)) for b in bodies), body.id)
+        if self._trim_cache is None or self._trim_cache[0] != sig:
+            self._trim_cache = (sig, kernel.trim_pieces([b.shape.Edges() for b in bodies], bodies.index(body)))
+        pieces = self._trim_cache[1]
+        uv = self.view.plane_point(body.plane, pos.x(), pos.y())
+        if not pieces or uv is None:
+            return None
+        import cadquery as cq
+        vertex = cq.Vertex.makeVertex(*[float(c) for c in kernel.to_world(body.plane, *uv)])
+        index = min(range(len(pieces)), key=lambda i: pieces[i].distance(vertex))
+        return body, pieces, index
+
+    def trim_preview(self):
+        try:
+            target = self._trim_target()
+            mesh = kernel.display_mesh(target[1][target[2]], PREVIEW_TOL) if target else None
+        except Exception:
+            mesh = None
+        self.view.set_preview_mesh(mesh, line_color=(.9, .18, .18, 1), width=5)
+
+    def trim_at_cursor(self):
+        target = self._trim_target()
+        if target is None:
             raise kernel.CadError('Kliknij fragment szkicu.')
-        index = hit[1]
+        body, pieces, index = target
 
         def build():
-            wires = kernel.remove_edge(body.shape, index)
-            made = [Body(body.name, w, 'sketch', body.plane).prepared() for w in wires]
+            made = [Body(body.name, w, 'sketch', body.plane).prepared() for w in kernel.trim_result(pieces, index)]
             out = []
             for b in self.document.bodies:
                 out.extend(made if b.id == body.id else [b])
             return out
 
+        self.view.set_preview_mesh(None)
         self.run_operation('Nożyczki', build, lambda bodies: self.document.commit(bodies))
-
     # ---------- wymiary z klawiatury (panel jak #dimensionPanel, podgląd na żywo) ----------
     def open_dim_input(self, first=''):
         labels = DIM_LABELS.get(self.tool)
@@ -1091,30 +1156,20 @@ class StudioWindow(QMainWindow):
 
     def _hover_extrude(self, x, y):
         blue = dict(color=(.35, .65, .94, .45), line_color=(.1, .3, .6, 1), width=2)
-        bid = self.view.pick_profile(x, y)
-        if bid is not None:
-            key = ('s', bid)
-            if key != self._hover_key:
-                self._hover_key = key
-                face = profile_face(self.document.get(bid).shape)
-                self.view.set_preview_mesh(kernel.display_mesh(face) if face is not None else None, **blue)
+        try:
+            src = self._profile_at(x, y)
+        except kernel.CadError:
+            src = None
+        if src is None:
+            if self._hover_key is not None:
+                self._hover_key = None
+                self.view.set_preview_mesh(None)
             return
-        hit = self.view.pick_face(x, y)
-        body = self.document.get(hit[0]) if hit else None
-        if body is not None and body.kind == 'solid':
-            try:
-                face, _ = kernel.face_at(body.shape, hit[1], hit[2])
-                key = ('f', face.hashCode())
-                if key != self._hover_key:
-                    self._hover_key = key
-                    self.view.set_preview_mesh(kernel.display_mesh(face), **blue)
-                return
-            except kernel.CadError:
-                pass
-        if self._hover_key is not None:
-            self._hover_key = None
-            self.view.set_preview_mesh(None)
-
+        face = src.get('face') or profile_face(src['wire'])
+        key = (src['kind'], src.get('id'), tuple(round(c, 3) for c in src['center']))
+        if key != self._hover_key:
+            self._hover_key = key
+            self.view.set_preview_mesh(kernel.display_mesh(face) if face is not None else None, **blue)
     def view_clicked(self, x, y, shift, ctrl):
         if self.busy:
             return
@@ -1155,19 +1210,67 @@ class StudioWindow(QMainWindow):
     # =====================================================================
     # wyciąganie: profil szkicu albo ściana bryły, strzałka, podgląd na żywo
     # =====================================================================
+    @staticmethod
+    def _plane_key(plane):
+        return plane if isinstance(plane, str) else (plane.origin, plane.xdir, plane.normal)
+
+    def _drawn_sketches(self):
+        """Szkice (bez konstrukcji i punktów) pogrupowane według płaszczyzn: klucz -> (płaszczyzna, [bryły])."""
+        groups = {}
+        for b in self.document.bodies:
+            if b.kind == 'sketch' and b.visible and not b.name.startswith(('Konstrukcja', 'Punkt')):
+                groups.setdefault(self._plane_key(b.plane), (b.plane, []))[1].append(b)
+        return groups
+
+    def _regions_for(self, key, plane, bodies):
+        sig = tuple((b.id, id(b.shape)) for b in bodies)
+        cached = self._region_cache.get(key)
+        if cached and cached[0] == sig:
+            return cached[1]
+        try:
+            faces = kernel.regions(plane, [e for b in bodies for e in b.shape.Edges()])
+        except Exception:
+            faces = [f for f in (profile_face(b.shape) for b in bodies if b.shape.IsClosed()) if f is not None]
+        self._region_cache[key] = (sig, faces)
+        return faces
+
+    def _region_at(self, x, y):
+        """Obszar szkicu pod kursorem (nakładające się kształty tną się nawzajem): (odległość, płaszczyzna, ściana)."""
+        best = None
+        for key, (plane, bodies) in self._drawn_sketches().items():
+            hit = self.view._plane_hit(plane, x, y)
+            if hit is None:
+                continue
+            for face in self._regions_for(key, plane, bodies):
+                if kernel.face_contains(face, hit[1]):
+                    if best is None or hit[0] < best[0]:
+                        best = (hit[0], plane, face)
+                    break
+        return best
+
     def _profile_at(self, x, y):
+        region = self._region_at(x, y)
+        hit = self.view.pick_face(x, y)
+        body = self.document.get(hit[0]) if hit else None
+        solid = None
+        if body is not None and body.kind == 'solid':
+            face, normal = kernel.face_at(body.shape, hit[1], hit[2])
+            ray = self.view._ray(x, y)
+            t = float(np.linalg.norm(np.asarray(hit[2], float) - ray[0])) if ray else 0.0
+            solid = (t, dict(kind='face', id=body.id, face=face, wire=face.outerWire(), plane=None, normal=tuple(float(c) for c in normal),
+                             center=face.Center().toTuple()))
+        if region is not None and (solid is None or region[0] <= solid[0] + 1e-6):
+            frame = kernel.frame_of(region[1])
+            face = region[2]
+            return dict(kind='region', id=None, face=face, wire=face.outerWire(), plane=region[1], normal=tuple(frame.normal), center=face.Center().toTuple())
+        if solid is not None:
+            return solid[1]
         bid = self.view.pick_profile(x, y)
         if bid is not None:
             body = self.document.get(bid)
             frame = kernel.frame_of(body.plane)
-            return dict(kind='sketch', id=bid, wire=body.shape, plane=body.plane, normal=tuple(frame.normal), center=body.shape.Center().toTuple())
-        hit = self.view.pick_face(x, y)
-        body = self.document.get(hit[0]) if hit else None
-        if body is not None and body.kind == 'solid':
-            face, normal = kernel.face_at(body.shape, hit[1], hit[2])
-            return dict(kind='face', id=body.id, wire=face.outerWire(), plane=None, normal=tuple(float(c) for c in normal), center=face.Center().toTuple())
+            return dict(kind='sketch', id=bid, face=None, wire=body.shape, plane=body.plane, normal=tuple(frame.normal), center=body.shape.Center().toTuple())
         return None
-
     def pick_profile(self, x, y, shift=False):
         try:
             src = self._profile_at(x, y)
@@ -1230,8 +1333,10 @@ class StudioWindow(QMainWindow):
         mode = self.ex_dir.currentData()
         out = []
         for src in self.ex_profiles:
-            wire, normal, plane = src['wire'], src['normal'], src['plane']
-            if mode == 'two':
+            wire, normal, plane, face = src['wire'], src['normal'], src['plane'], src.get('face')
+            if face is not None:
+                out.append(lambda f=face, n=normal, a=d1, b=d2 if mode == 'two' else 0.0, s=mode == 'symmetric': kernel.extrude_face(f, n, a, b, s))
+            elif mode == 'two':
                 out.append(lambda w=wire, n=normal, a=d1, b=d2: kernel.extrude_dir(w, n, a, b))
             elif plane is not None:
                 out.append(lambda w=wire, p=plane, a=d1, s=mode == 'symmetric': kernel.extrude(w, p, a, s))
@@ -1588,6 +1693,8 @@ class StudioWindow(QMainWindow):
         self.t_target = body
         box = kernel.bounds(body.shape)
         self.t_center = np.array(box.center.toTuple(), float)
+        self.t_mass = np.array(body.shape.Center().toTuple(), float)
+        self.view.clear_body_matrices()
         self.t_radius = max(8.0, max(box.xlen, box.ylen, box.zlen) * .75)
         self.t_status.setText(f'Zaznaczono: {body.name}')
         for spin in self.t_spins:
@@ -1617,7 +1724,7 @@ class StudioWindow(QMainWindow):
                 handles.append(dict(id='xyz'[i], start=tip, tip=tip, dir=np.cross(a, e1), color=AXIS_COLORS[i], label=letter, ring=(c, a, r), min_px=0))
         self.view.set_handles(handles)
     def _transform_changed(self):
-        self._timers['transform'].start()
+        self.update_transform_preview()
         if self._hv is None:
             self._place_gizmo()
 
@@ -1651,22 +1758,21 @@ class StudioWindow(QMainWindow):
             self._place_gizmo()
 
     def update_transform_preview(self):
+        """Podgląd przesunięcia / obrotu bez liczenia geometrii: macierz nakładana na elementy GL (natychmiast, nawet dla dużych brył)."""
         if self.mode not in ('move', 'rotate') or self.t_target is None:
             return
-        v = tuple(s.value() for s in self.t_spins)
-        target, mode = self.t_target, self.mode
-
-        def compute():
-            shape = kernel.transform(target.shape, v, (0, 0, 0)) if mode == 'move' else kernel.transform(target.shape, (0, 0, 0), v)
-            return replace(target, shape=shape, mesh=kernel.display_mesh(shape, PREVIEW_TOL))
-
-        def show(body, error):
-            if error or self.mode != mode or self.t_target is not target:
-                return
-            self.override = {target.id: body}
-            self.refresh()
-
-        self.run_preview('transform', compute, show)
+        v = [s.value() for s in self.t_spins]
+        m = QMatrix4x4()
+        if self.mode == 'move':
+            m.translate(*v)
+        else:
+            c = self.t_mass
+            m.translate(*c)
+            for axis, angle in ((2, v[2]), (1, v[1]), (0, v[0])):
+                if angle:
+                    m.rotate(float(angle), *[1.0 if i == axis else 0.0 for i in range(3)])
+            m.translate(*(-c))
+        self.view.set_body_matrix(self.t_target.id, m)
     def apply_transform(self):
         if self.busy or self.t_target is None:
             self.toast('Kliknij obiekt, aby go zaznaczyć.')
@@ -1681,6 +1787,7 @@ class StudioWindow(QMainWindow):
             return target.changed(shape)
 
         def apply(body):
+            self.view.clear_body_matrices()
             self.document.commit([body if b.id == body.id else b for b in self.document.bodies])
             self.selected = [body.id]
 

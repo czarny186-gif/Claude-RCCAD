@@ -54,13 +54,14 @@ BACKGROUND = '#edf2f8'
 GRID_COLOR = '#9fb6cf'
 BG_TOP = (0.985, 0.992, 1.0)
 BG_BOTTOM = (0.875, 0.915, 0.96)
-SOLID_COLOR = (.54, .54, .56, 1)
+SOLID_COLOR = (.62, .68, .76, 1)
 SOLID_SELECTED = (.40, .60, .90, 1)
-EDGE_COLOR = (0, 0, 0, 1)
-SKETCH_COLOR = (.106, .427, .757, 1)
+EDGE_COLOR = (.10, .13, .18, 1)
+SKETCH_COLOR = (.03, .20, .52, 1)
 PREVIEW_COLOR = (1, .48, .05, 1)
 PLANE_COLORS = {'XY': '#3b82f6', 'XZ': '#22a06b', 'YZ': '#e5484d'}
-PLANE_HALF = 30.0
+PLANE_HALF = 14.0
+GRID_LEVELS = (.1, .2, .5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000)
 VIEWS = {  # (elewacja, azymut) kamery pyqtgraph
     'iso': (25, -55), 'XY': (90, -90), 'XZ': (0, -90), 'YZ': (0, 0),
     'Z': (90, -90), '-Z': (-90, -90), 'X': (0, 0), '-X': (0, 180), 'Y': (0, 90), '-Y': (0, -90),
@@ -171,8 +172,12 @@ class CadView(gl.GLViewWidget):
                     varying vec4 v_color;
                     varying vec3 v_normal;
                     void main() {
-                        float diffuse = max(0.0, dot(normalize(v_normal), normalize(vec3(0.3, 0.6, 1.0))));
-                        gl_FragColor = vec4(v_color.rgb * (0.58 + 0.42 * diffuse), v_color.a);
+                        vec3 n = normalize(v_normal);
+                        float key = max(0.0, dot(n, normalize(vec3(0.3, 0.6, 1.0))));
+                        float fill = max(0.0, dot(n, normalize(vec3(-0.6, -0.4, 0.25))));
+                        float sky = 0.5 + 0.5 * n.z;
+                        float light = 0.46 + 0.34 * key + 0.12 * sky + 0.16 * fill;
+                        gl_FragColor = vec4(v_color.rgb * light, v_color.a);
                     }
                 """),
             ])
@@ -181,7 +186,9 @@ class CadView(gl.GLViewWidget):
         self.setCameraPosition(distance=120, elevation=25, azimuth=-55)
         self.addItem(GradientBackground(BG_TOP, BG_BOTTOM))
         self.grid_items = []
-        for size, step, color in ((600, 5, '#d1dcea'), (600, 25, '#a3b9cf')):
+        self._grid_plane = None
+        self._grid_key = None
+        for size, step, color in ((600, 5, '#d3deeb'), (600, 25, '#9db5cc')):
             grid = gl.GLGridItem()
             grid.setSize(size, size)
             grid.setSpacing(step, step)
@@ -189,6 +196,10 @@ class CadView(gl.GLViewWidget):
             self.addItem(grid)
             self.grid_items.append(grid)
         self.grid_item = self.grid_items[-1]
+        for pts, col in (([(-1000, 0, 0), (1000, 0, 0)], (.89, .31, .33, .85)), ([(0, -1000, 0), (0, 1000, 0)], (.14, .64, .42, .85)),
+                         ([(0, 0, 0), (0, 0, 1000)], (.2, .5, .9, .85))):
+            axis = gl.GLLinePlotItem(pos=np.array(pts, dtype=np.float32), color=col, width=2, antialias=True)
+            self.addItem(axis)
         self.custom_plane_items = []
         self.marker_items = []
         self.bodies = ()
@@ -224,12 +235,42 @@ class CadView(gl.GLViewWidget):
         self.sketch_centers = []
         self.snap_marker = None       # ((x, y), etykieta) - przyciąganie jak w wersji HTML
         self.snapper = None           # funkcja (x, y, (u, v)) -> (u, v, etykieta) ustawiana przez Studio
+        self._body_m = {}             # id bryły -> macierz podglądu przesunięcia / obrotu (bez ponownego liczenia geometrii)
         self._cache = {}              # id bryły -> (klucz, elementy GL): bez przebudowy całej sceny przy każdej zmianie
         self.overlay = Overlay2D(self)
         self.overlay.setGeometry(0, 0, self.width(), self.height())
         self.overlay.raise_()
 
+    def _refresh_grid(self):
+        """Siatka zagęszcza się przy przybliżaniu (min. 12 px między cienkimi liniami) i podąża za środkiem widoku."""
+        if not getattr(self, 'grid_items', None) or self.width() < 2:
+            return
+        dist = max(float(self.opts['distance']), 1e-6)
+        ppm = (self.height() / 2) / (dist * math.tan(math.radians(float(self.opts['fov']) / 2)))
+        step = next((g for g in GRID_LEVELS if g * ppm >= 12), GRID_LEVELS[-1])
+        major = step * 5
+        plane = self._grid_plane or 'XY'
+        c = self.opts['center']
+        u, v = kernel.uv_of(plane, (c.x(), c.y(), c.z()))
+        cu, cv = round(u / major) * major, round(v / major) * major
+        key = (step, cu, cv, id(plane) if not isinstance(plane, str) else plane)
+        if key == self._grid_key:
+            return
+        self._grid_key = key
+        frame = kernel.frame_of(plane)
+        m = QMatrix4x4()
+        x, y, n = (np.array(vec, float) for vec in (frame.xdir, frame.ydir, frame.normal))
+        o = np.array(frame.origin, float) + x * cu + y * cv
+        for r in range(3):
+            m.setRow(r, QVector4D(float(x[r]), float(y[r]), float(n[r]), float(o[r])))
+        half = step * 120
+        for grid, spacing in zip(self.grid_items, (step, major)):
+            grid.setSize(2 * half, 2 * half)
+            grid.setSpacing(spacing, spacing)
+            grid.setTransform(m)
+
     def update(self, *args):
+        self._refresh_grid()
         super().update(*args)
         ov = getattr(self, 'overlay', None)
         if ov is not None:
@@ -239,6 +280,32 @@ class CadView(gl.GLViewWidget):
         super().resizeEvent(event)
         self.overlay.setGeometry(0, 0, self.width(), self.height())
         self.overlay.raise_()
+
+    def _apply_body_matrix(self, bid):
+        cached = self._cache.get(bid)
+        if not cached:
+            return
+        m = self._body_m.get(bid)
+        for item in cached[1]:
+            if m is None:
+                item.resetTransform()
+            else:
+                item.setTransform(m)
+
+    def set_body_matrix(self, bid, matrix):
+        """Natychmiastowy podgląd przesunięcia / obrotu: macierz 4x4 nakładana na elementy GL bryły."""
+        if matrix is None:
+            self._body_m.pop(bid, None)
+        else:
+            self._body_m[bid] = QMatrix4x4(matrix)
+        self._apply_body_matrix(bid)
+        self.update()
+
+    def clear_body_matrices(self):
+        for bid in list(self._body_m):
+            self._body_m.pop(bid)
+            self._apply_body_matrix(bid)
+        self.update()
 
     def project_one(self, point):
         xy, _, w = self.project_points(np.asarray([point], float))
@@ -276,10 +343,12 @@ class CadView(gl.GLViewWidget):
                 for index, points in mesh.edges.items():
                     hot = index in sel or picked
                     base = SKETCH_COLOR if body.kind == 'sketch' else EDGE_COLOR
-                    line = gl.GLLinePlotItem(pos=points, color=PREVIEW_COLOR if hot else base, width=3.5 if hot else (2.3 if body.kind == 'sketch' else 1.5), antialias=False)
+                    line = gl.GLLinePlotItem(pos=points, color=PREVIEW_COLOR if hot else base, width=3.5 if hot else (2.3 if body.kind == 'sketch' else 1.5), antialias=True)
                     self.addItem(line)
                     items.append(line)
                 self._cache[body.id] = (key, items)
+                if body.id in self._body_m:
+                    self._apply_body_matrix(body.id)
             if body.kind == 'sketch' and len(mesh.vertices) + len(mesh.edges):
                 pts = np.concatenate([e.reshape(-1, 3) for e in mesh.edges.values()]) if mesh.edges else mesh.vertices
                 if len(pts):
@@ -571,14 +640,8 @@ class CadView(gl.GLViewWidget):
     # ---------- siatka szkicu, płaszczyzna ściany, kamera, znacznik ----------
     def set_grid_frame(self, plane):
         """Siatka leży na płaszczyźnie szkicu (None = XY)."""
-        frame = kernel.frame_of(plane or 'XY')
-        m = QMatrix4x4()
-        x, y, n, o = (np.array(v, float) for v in (frame.xdir, frame.ydir, frame.normal, frame.origin))
-        m.setToIdentity()
-        for r in range(3):
-            m.setRow(r, QVector4D(float(x[r]), float(y[r]), float(n[r]), float(o[r])))
-        for grid in self.grid_items:
-            grid.setTransform(m)
+        self._grid_plane = plane
+        self._grid_key = None
         self.update()
 
     def show_custom_plane(self, frame, half=30.0, color=(1.0, .55, .1)):

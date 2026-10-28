@@ -662,3 +662,146 @@ def edge_handle(shape, index):
         total = np.cross(t, (0, 0, 1.0) if abs(t[2]) < .9 else (1.0, 0, 0))
         n = np.linalg.norm(total)
     return mid.toTuple(), tuple(float(c) for c in -total / n)
+
+
+# ---------- szkice łączą się jak w wersji HTML: obszary, przycinanie między przecięciami ----------
+def _tolist(shapes):
+    from OCP.TopTools import TopTools_ListOfShape
+    lst = TopTools_ListOfShape()
+    for s in shapes:
+        lst.Append(s)
+    return lst
+
+
+def _fromlist(lst):
+    from OCP.TopTools import TopTools_ListIteratorOfListOfShape
+    out, it = [], TopTools_ListIteratorOfListOfShape(lst)
+    while it.More():
+        out.append(it.Value())
+        it.Next()
+    return out
+
+
+def split_edges(edges):
+    """General Fuse: dzieli krawędzie w punktach przecięcia. Zwraca dla każdej krawędzi wejściowej listę jej kawałków."""
+    from OCP.BOPAlgo import BOPAlgo_Builder
+    builder = BOPAlgo_Builder()
+    for e in edges:
+        builder.AddArgument(e.wrapped)
+    builder.SetRunParallel(False)
+    builder.Perform()
+    if builder.HasErrors():
+        raise CadError("Nie udało się połączyć szkiców.")
+    out = []
+    for e in edges:
+        pieces = [cq.Shape.cast(m) for m in _fromlist(builder.Modified(e.wrapped))]
+        pieces = [p for p in pieces if p.geomType() is not None and p.Length() > 1e-6]
+        if pieces:
+            out.append(pieces)
+        elif builder.IsDeleted(e.wrapped):
+            out.append([])
+        else:
+            out.append([e])
+    return out
+
+
+def regions(plane, edges):
+    """Wszystkie obszary ograniczone krawędziami szkiców (jak 'region' w HTML): nakładające się kształty tną się nawzajem."""
+    from OCP.BOPAlgo import BOPAlgo_BuilderFace
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
+    from OCP.gp import gp_Ax3, gp_Dir, gp_Pln, gp_Pnt
+    if not edges:
+        return []
+    unique = []
+    for pieces in split_edges(edges):
+        for p in pieces:
+            if not any(p.isSame(q) for q in unique):
+                unique.append(p)
+    frame = frame_of(plane)
+    pln = gp_Pln(gp_Ax3(gp_Pnt(*[float(c) for c in frame.origin]), gp_Dir(*[float(c) for c in frame.normal]), gp_Dir(*[float(c) for c in frame.xdir])))
+    face = BRepBuilderAPI_MakeFace(pln, -1e4, 1e4, -1e4, 1e4).Face()
+    builder = BOPAlgo_BuilderFace()
+    builder.SetFace(face)
+    builder.SetShapes(_tolist([p.wrapped for p in unique]))
+    builder.Perform()
+    if builder.HasErrors():
+        raise CadError("Nie udało się wyznaczyć obszarów szkicu.")
+    out = []
+    for shape in _fromlist(builder.Areas()):
+        f = cq.Shape.cast(shape)
+        try:
+            if 1e-6 < f.Area() < 1e7 and f.outerWire().IsClosed():
+                out.append(f)
+        except Exception:
+            continue
+    return out
+
+
+def face_contains(face, point):
+    from OCP.BRepClass import BRepClass_FaceClassifier
+    from OCP.TopAbs import TopAbs_IN, TopAbs_ON
+    from OCP.gp import gp_Pnt
+    try:
+        return BRepClass_FaceClassifier(face.wrapped, gp_Pnt(*[float(c) for c in point]), 1e-5).State() in (TopAbs_IN, TopAbs_ON)
+    except Exception:
+        return face.distance(cq.Vertex.makeVertex(*[float(c) for c in point])) < 1e-5
+
+
+def extrude_face(face, normal, d1, d2=0.0, symmetric=False):
+    """Wyciągnięcie ściany / obszaru (z otworami) wzdłuż normalnej: d1 > 0 po normalnej, d1 < 0 przeciwnie."""
+    d1, d2 = float(d1), float(d2)
+    n = np.asarray(normal, dtype=float)
+    n = n / np.linalg.norm(n)
+    nv = cq.Vector(*[float(x) for x in n])
+    shift, total = (-d1 / 2, d1) if symmetric else (-d2, d1 + d2)
+    if not isfinite(total) or abs(total) < 1e-5:
+        raise CadError("Odległość wyciągnięcia musi być różna od zera.")
+    move = (lambda w: w.translate(nv.multiply(shift))) if shift else (lambda w: w)
+    return valid(cq.Solid.extrudeLinear(move(face.outerWire()), [move(w) for w in face.innerWires()], nv.multiply(total)))
+
+
+def _chains(edges, tol=1e-4):
+    """Układa krawędzie w łańcuchy (druty) według wspólnych końców."""
+    key = lambda p: (round(p.x / tol), round(p.y / tol), round(p.z / tol))
+    left, chains = list(edges), []
+    while left:
+        chain = [left.pop(0)]
+        grown = True
+        while grown:
+            grown = False
+            for e in list(left):
+                a, b = key(e.startPoint()), key(e.endPoint())
+                head, tail = key(chain[0].startPoint()), key(chain[-1].endPoint())
+                if a == tail or b == tail:
+                    chain.append(e if a == tail else cq.Edge(e.wrapped.Reversed()))
+                elif a == head or b == head:
+                    chain.insert(0, e if b == head else cq.Edge(e.wrapped.Reversed()))
+                else:
+                    continue
+                left.remove(e)
+                grown = True
+        chains.append(chain)
+    wires = []
+    for chain in chains:
+        try:
+            wires.append(cq.Wire.assembleEdges(chain))
+        except Exception:
+            wires += [cq.Wire.assembleEdges([e]) for e in chain]
+    return wires
+
+
+def trim_pieces(bodies_edges, target):
+    """Kawałki krawędzi szkicu `target` między punktami przecięcia z pozostałymi szkicami (lista krawędzi)."""
+    flat, owner = [], []
+    for i, edges in enumerate(bodies_edges):
+        for e in edges:
+            flat.append(e)
+            owner.append(i)
+    per = split_edges(flat)
+    return [p for pieces, o in zip(per, owner) if o == target for p in pieces]
+
+
+def trim_result(pieces, index):
+    """Druty po usunięciu kawałka `index`."""
+    rest = [p for i, p in enumerate(pieces) if i != index]
+    return _chains(rest) if rest else []

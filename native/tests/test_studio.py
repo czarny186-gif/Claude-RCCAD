@@ -145,10 +145,10 @@ class StudioTests(unittest.TestCase):
 
     def test_move_and_rotate_selected_solid_live(self):
         w=self.w;a,b=self.make_solids();w.selected=[a.id];w.set_mode('move');self.assertIs(w.t_target.id,a.id)
-        w.t_spins[0].setValue(7);w.update_transform_preview();self.preview();self.assertAlmostEqual(w.override[a.id].shape.Center().x,10+7,2)
+        w.t_spins[0].setValue(7);self.assertIn(a.id,w.view._body_m)
         w.handle_dragged('x',3.0);w.handle_released('x');w.apply_transform();self.wait()
         self.assertAlmostEqual(w.document.get(a.id).shape.Center().x,10+10,2)
-        w.selected=[a.id];w.set_mode('rotate');w.t_spins[2].setValue(90);w.update_transform_preview();self.preview();self.assertTrue(w.override)
+        w.selected=[a.id];w.set_mode('rotate');w.t_spins[2].setValue(90);self.assertIn(a.id,w.view._body_m)
         w.apply_transform();self.wait()
 
     def test_move_selected_sketch(self):
@@ -180,7 +180,8 @@ class StudioTests(unittest.TestCase):
 
     def test_trim_removes_clicked_segment(self):
         self.sketch('rect',(0,0),(10,10));w=self.w;w.choose_tool('trim');body=w.document.bodies[0]
-        with patch.object(w,'_cursor_edge',return_value=(body.id,0)):w.sketch_clicked('XY',0,0)
+        pieces=k.trim_pieces([body.shape.Edges()],0)
+        with patch.object(w,'_trim_target',return_value=(body,pieces,0)):w.sketch_clicked('XY',0,0)
         self.wait();self.assertFalse(w.document.bodies[0].shape.IsClosed())
 
     def test_tangent_circle_between_two_lines(self):
@@ -214,6 +215,34 @@ class StudioTests(unittest.TestCase):
         u,v,label=w._snapper(x+3,y+2,(10.4,10.3));self.assertEqual(label,'Punkt styku');self.assertAlmostEqual(u,10,3);self.assertAlmostEqual(v,10,3)
         u,v,label=w._snapper(x+60,y+60,(14.3,3.9));self.assertEqual(label,None if label is None else 'Siatka')
         w.view.set_marker(k.to_world('XY',10,10),label='Punkt styku');self.assertIsNotNone(w.view.snap_marker)
+
+    def test_overlapping_shapes_make_regions_and_extrude_overlap(self):
+        w=self.w;self.sketch('rect',(0,0),(10,10));self.sketch('rect',(5,0),(15,10))
+        plane,bodies=w._drawn_sketches()['XY'];faces=w._regions_for('XY',plane,bodies)
+        self.assertEqual(len(faces),3);areas=sorted(round(f.Area()) for f in faces);self.assertEqual(areas,[50,50,50])
+        self.assertTrue(any(k.face_contains(f,k.to_world('XY',7.5,5)) for f in faces))
+        mid=[f for f in faces if k.face_contains(f,k.to_world('XY',7.5,5))][0]
+        w.set_mode('extrude');src=dict(kind='region',id=None,face=mid,wire=mid.outerWire(),plane='XY',normal=(0,0,1),center=mid.Center().toTuple())
+        with patch.object(w,'_profile_at',return_value=src):w.view_clicked(5,5,False,False)
+        w.ex_value.setValue(4);w.apply_extrude();self.wait()
+        solid=[b for b in w.document.bodies if b.kind=='solid'][0];self.assertAlmostEqual(solid.shape.Volume(),50*4,2)
+
+    def test_trim_splits_at_intersection(self):
+        w=self.w;self.sketch('line',(0,0),(20,0),(20,0));self.sketch('line',(10,-5),(10,5),(10,5))
+        a,b=w.document.bodies;pieces=k.trim_pieces([a.shape.Edges(),b.shape.Edges()],0);self.assertEqual(len(pieces),2)
+        w.choose_tool('trim')
+        with patch.object(w,'_trim_target',return_value=(a,pieces,0)):w.sketch_clicked('XY',0,0)
+        self.wait();self.assertEqual(len(w.document.bodies),2)
+        self.assertAlmostEqual(k.bounds(w.document.bodies[0].shape).xlen,10,3)
+
+    def test_cube_button_picks_sketch_plane_and_grid_adapts(self):
+        w=self.w;w.set_mode('plane');w.cube_buttons['X'].click();self.assertEqual((w.mode,w.sketch_plane),('sketch','YZ'))
+        w.view.opts['distance']=400;w.view.update();far=w.view._grid_key[0]
+        w.view.opts['distance']=15;w.view.update();near=w.view._grid_key[0];self.assertLess(near,far)
+
+    def test_transform_preview_is_instant_matrix(self):
+        w=self.w;a,b=self.make_solids();w.selected=[a.id];w.set_mode('rotate');w.t_spins[0].setValue(30)
+        self.assertIsNotNone(w.view._body_m.get(a.id));w.set_mode(None);self.assertNotIn(a.id,w.view._body_m)
 
     def test_svg_import(self):
         import tempfile
