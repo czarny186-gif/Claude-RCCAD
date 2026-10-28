@@ -288,6 +288,7 @@ class CadView(gl.GLViewWidget):
         self.setCameraPosition(distance=120, elevation=25, azimuth=-55)
         self.addItem(GradientBackground(BG_TOP, BG_BOTTOM))
         self.grid_items = []
+        self.axis_lines = []
         self._grid_plane = None
         self._plane_half = 8.0
         self._grid_key = None
@@ -303,6 +304,7 @@ class CadView(gl.GLViewWidget):
                          ([(0, 0, 0), (0, 0, 1000)], (.2, .5, .9, .85))):
             axis = gl.GLLinePlotItem(pos=np.array(pts, dtype=np.float32), color=col, width=2, antialias=True)
             self.addItem(axis)
+            self.axis_lines.append((axis, np.array(pts[1], float) / 1000.0))
         self.custom_plane_items = []
         self.marker_items = []
         self.bodies = ()
@@ -382,11 +384,21 @@ class CadView(gl.GLViewWidget):
 
     def update(self, *args):
         self._refresh_grid()
+        self._refresh_axes()
         super().update(*args)
         self.cameraMoved.emit()
         ov = getattr(self, 'overlay', None)
         if ov is not None:
             ov.update()
+
+    def _refresh_axes(self):
+        """Oś patrzenia wzdłuż osi świata (np. widok z góry) rzutowałaby się jako skośna kreska - wtedy ją chowamy."""
+        try:
+            cam = self.camera_dir()
+        except Exception:
+            return
+        for item, direction in self.axis_lines:
+            item.setVisible(abs(float(np.dot(cam, direction))) < .985)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -987,10 +999,10 @@ class CadView(gl.GLViewWidget):
         xy = np.column_stack(((ndc[:, 0] + 1) * self.width() / 2, (1 - ndc[:, 1]) * self.height() / 2))
         return xy, ndc[:, 2], w
 
-    def nearest_edge(self, x, y):
+    def nearest_edge(self, x, y, solids_only=False):
         best, distance = None, 10.
         for body in self.bodies:
-            if not body.visible or not body.mesh:
+            if not body.visible or not body.mesh or (solids_only and body.kind != 'solid'):
                 continue
             for index, points in body.mesh.edges.items():
                 xy, z, w = self.project_points(points)

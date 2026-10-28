@@ -174,7 +174,7 @@ class StudioWindow(QMainWindow):
                            ('gizmo', self._place_gizmo)):
             timer = QTimer(self)
             timer.setSingleShot(True)
-            timer.setInterval(16 if name == 'extrude' else 40)
+            timer.setInterval(16 if name in ('extrude', 'mod') else 40)
             timer.timeout.connect(slot)
             self._timers[name] = timer
         for seq, fn in (('Ctrl+Z', self.undo), ('Ctrl+Y', self.redo), ('Ctrl+Shift+Z', self.redo), ('Ctrl+S', self.save_project),
@@ -1177,7 +1177,11 @@ class StudioWindow(QMainWindow):
             elif self.mode == 'mirror' and self.mirror_id and self.mirror_frame is None:
                 self._hover_face_only(x, y)
             elif self.mode == 'mod':
-                self.view._set_hover_edge(self.view.nearest_edge(x, y))
+                self.view._set_hover_edge(self.view.nearest_edge(x, y, True))
+            elif self.mode is None and self._planes_visible:
+                name = self.view.plane_at(x, y)
+                self.view._highlight_plane(name)
+                self.view.setCursor(Qt.PointingHandCursor if name else Qt.ArrowCursor)
             elif self.mode == 'extrude' and not self.ex_profiles:
                 self._hover_extrude(x, y)
         except Exception:
@@ -1234,6 +1238,11 @@ class StudioWindow(QMainWindow):
             self.pick_transform_target(x, y)
         elif self.mode is None:
             bid = self.pick_object(x, y)
+            if bid is None and self._planes_visible and not (shift or ctrl):
+                name = self.view.plane_at(x, y)
+                if name:
+                    self.enter_sketch(name)
+                    return
             if bid is None:
                 if not (shift or ctrl):
                     self.selected = []
@@ -1424,7 +1433,7 @@ class StudioWindow(QMainWindow):
         d = self.ex_value.value()
         mode = self.ex_dir.currentData()
         sign = 1.0 if d >= 0 else -1.0
-        handles = [dict(id='ex', start=c, tip=c + n * (d / 2 if mode == 'symmetric' else d), dir=n * sign, color=(.94, .6, .13, 1), label='+')]
+        handles = [dict(id='ex', start=c, tip=c + n * (d / 2 if mode == 'symmetric' else d), dir=n, color=(.94, .6, .13, 1), label='+')]
         if mode == 'two':
             d2 = self.ex_second.value()
             handles.append(dict(id='ex2', start=c, tip=c - n * d2, dir=-n, color=(.11, .51, .81, 1), label='−'))
@@ -1603,7 +1612,7 @@ class StudioWindow(QMainWindow):
             self._place_mod_handle()
 
     def pick_edge(self, x, y, shift, ctrl):
-        hit = self.view.nearest_edge(x, y)
+        hit = self.view.nearest_edge(x, y, True)
         if hit is None:
             if not (shift or ctrl):
                 self.edges = {}
@@ -2255,7 +2264,33 @@ class StudioWindow(QMainWindow):
         super().keyPressEvent(event)
 
     def closeEvent(self, event):
-        if self.confirm_discard():
+        if self.busy:
+            self.toast('Trwa operacja — poczekaj na jej zakończenie.')
+            event.ignore()
+            return
+        if not self.document.dirty:
+            event.accept()
+            return
+        answer = QMessageBox.question(self, 'Niezapisane zmiany', 'Projekt ma niezapisane zmiany. Zapisać przed zamknięciem?',
+                                      QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel, QMessageBox.Save)
+        if answer == QMessageBox.Discard:
+            event.accept()
+        elif answer == QMessageBox.Save:
+            path = self.document.path
+            if path is None:
+                value, _ = QFileDialog.getSaveFileName(self, 'Zapisz projekt', 'Projekt.rccadx', 'RCCAD (*.rccadx)')
+                if not value:
+                    event.ignore()
+                    return
+                path = Path(value)
+                if path.suffix.lower() != '.rccadx':
+                    path = path.with_suffix('.rccadx')
+            try:
+                self.document.save(path)
+            except Exception as exc:
+                QMessageBox.warning(self, 'Zapis nie powiódł się', str(exc))
+                event.ignore()
+                return
             event.accept()
         else:
             event.ignore()

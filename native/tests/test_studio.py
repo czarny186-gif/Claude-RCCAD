@@ -3,6 +3,7 @@ import os, faulthandler
 faulthandler.dump_traceback_later(420, exit=True, file=open(os.environ.get("DIAG_FILE","diag_hang.txt"),"w"))
 os.environ.setdefault('QT_QPA_PLATFORM','offscreen' if not os.environ.get('DISPLAY') and os.name!='nt' else '')
 import time
+import numpy as np
 import unittest
 from unittest.mock import patch
 from PySide6.QtCore import QEvent,Qt
@@ -254,6 +255,19 @@ class StudioTests(unittest.TestCase):
         self.assertEqual(k.point_state(solid.shape,(5,5,5)),'in')
         from rccad.splash import Splash
         sp=Splash('');sp.show();sp.repaint();sp.close()
+
+    def test_idle_planes_axes_close_prompt_and_reverse_arrow(self):
+        w=self.w;w.set_mode(None);w.view.set_view('iso');self.app.processEvents()
+        xy=w.view.project_one((.5,.5,0));self.assertEqual(w.view.plane_at(*xy),'XY')
+        w.view_clicked(xy[0],xy[1],False,False);self.assertEqual((w.mode,w.sketch_plane),('sketch','XY'))
+        w.set_mode(None);w.view.set_view('Z');w.view.update();self.assertFalse(w.view.axis_lines[2][0].visible())
+        w.view.set_view('iso');w.view.update();self.assertTrue(w.view.axis_lines[2][0].visible())
+        self.sketch('rect',(0,0),(10,10));w.set_mode('extrude');self.pick_sketch_profile(w.document.bodies[0])
+        w.ex_value.setValue(-5);w._place_extrude_handle();h=w.view.handles[0];self.assertAlmostEqual(float(np.dot(h['dir'],h['tip']-h['start'])),-5,3)
+        self.assertTrue(w.document.dirty)
+        with patch.object(QMessageBox,'question',return_value=QMessageBox.Cancel):
+            from PySide6.QtGui import QCloseEvent
+            ev=QCloseEvent();w.closeEvent(ev);self.assertFalse(ev.isAccepted())
 
     def test_cube_button_picks_sketch_plane_and_grid_adapts(self):
         w=self.w;w.set_mode('plane');w._cube_clicked('X');self.assertEqual((w.mode,w.sketch_plane),('sketch','YZ'))

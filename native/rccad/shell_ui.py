@@ -15,6 +15,7 @@ PANEL_TEXT = '#29475e'
 
 def style():
     chev = (ASSETS / 'chev.svg').as_posix()
+    check = (ASSETS / 'check_w.png').as_posix()
     return """
 * { font-family: "Segoe UI", Arial, sans-serif; }
 QToolTip { background:#fff; color:#29475e; border:1px solid #b2c7db; padding:4px 7px; }
@@ -62,7 +63,11 @@ QFrame#panel QLabel#title { font-size:12px; font-weight:700; }
 QFrame#panel QLabel#label { font-weight:600; }
 QFrame#panel QLabel#small { color:#607b90; font-size:10px; }
 QFrame#panel QLabel#status { background:#f2f7fc; border-radius:7px; padding:8px; color:#29475e; font-size:12px; }
-QFrame#panel QCheckBox, QFrame#bar QCheckBox { color:#29475e; font-size:12px; background:transparent; spacing:7px; }
+QFrame#panel QCheckBox, QFrame#bar QCheckBox { color:#29475e; font-size:12px; background:transparent; spacing:8px; }
+QCheckBox::indicator { width:18px; height:18px; border:1.6px solid #9db5cc; border-radius:5px; background:#ffffff; }
+QCheckBox::indicator:hover { border-color:#2f87e8; }
+QCheckBox::indicator:checked { background:#2f87e8; border-color:#2f87e8; image:url(CHECKPNG); }
+QCheckBox::indicator:disabled { background:#eef2f6; border-color:#d6e0ea; }
 QFrame#panel QComboBox, QFrame#panel QDoubleSpinBox, QFrame#panel QLineEdit, QFrame#panel QPlainTextEdit,
 QFrame#bar QDoubleSpinBox, QFrame#bar QLineEdit {
     background:#fff; border:1px solid #b1c5d7; border-radius:6px; padding:5px 7px; color:#254c71; font-size:12px; min-height:18px; selection-background-color:#bcdcff; }
@@ -71,14 +76,14 @@ QFrame#panel QComboBox::drop-down { border:0; width:22px; }
 QFrame#panel QComboBox::down-arrow { image:url(""" + chev + """); width:10px; height:6px; }
 QFrame#panel QComboBox QAbstractItemView { background:#fff; color:#254c71; border:1px solid #b1c5d7; selection-background-color:#dcefff; selection-color:#254c71; }
 QFrame#panel QPushButton, QFrame#bar QPushButton { background:#f5f9fd; border:1px solid #a8bfd3; border-radius:6px; padding:7px 10px; color:#29475e; font-size:12px; }
-QFrame#panel QPushButton:hover, QFrame#bar QPushButton:hover { background:#080808; color:#fff; border-color:#080808; }
+QFrame#panel QPushButton:hover, QFrame#bar QPushButton:hover { background:#e9f3ff; color:#17314a; border-color:#2f87e8; }
 QFrame#panel QPushButton:disabled { color:#9aa9b8; }
 QLabel#notice { background:#fff; border:1px solid #d5b880; border-left:4px solid #e2a23a; border-radius:9px; padding:11px 16px; color:#584a32; font-size:13px; }
 QLabel#origin { color:#71869b; font-size:12px; background:transparent; }
 QLabel#dim { background:rgba(255,255,255,0.93); color:#1c5a8f; font-size:12px; font-weight:700; padding:3px 7px; border-radius:3px; }
 QFrame#popup { background:rgba(255,255,255,0.97); border:1px solid #b2c7db; border-radius:11px; }
 QFrame#popup QPushButton { background:transparent; border:0; border-radius:7px; padding:9px 11px; color:#29475e; font-size:13px; text-align:left; }
-QFrame#popup QPushButton:hover:enabled { background:#080808; color:#fff; }
+QFrame#popup QPushButton:hover:enabled { background:#e9f3ff; color:#17314a; }
 QFrame#popup QPushButton:disabled { color:#a9b6c4; }
 QFrame#popup QLabel { background:transparent; color:#29475e; font-size:13px; }
 QFrame#popup QLabel#hintlabel { font-size:11px; color:#8aa0b5; }
@@ -96,7 +101,7 @@ QFrame#dimpanel { background:rgba(255,255,255,0.93); border:1px solid #b9cbdc; b
 QFrame#dimpanel QLabel { color:#344e69; font-size:12px; font-weight:600; background:transparent; }
 QFrame#dimpanel QLabel#help { color:#71869b; font-weight:400; }
 QFrame#dimpanel QLineEdit { background:#fff; border:1px solid #9ab5d0; border-radius:6px; padding:6px 8px; color:#0969d9; font-size:14px; font-weight:700; min-width:80px; max-width:94px; }
-"""
+""".replace('CHECKPNG', check)
 
 
 def _pixmap_from_svg(svg: str, color: str, size: int, scale: int = 2) -> QPixmap:
@@ -219,7 +224,7 @@ class PopupMenu(QFrame):
     def __init__(self, parent, items, min_width=170, row_height=None):
         super().__init__(parent, Qt.Popup | Qt.FramelessWindowHint)
         self.setObjectName('popup')
-        self.setAttribute(Qt.WA_TranslucentBackground, False)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(6, 6, 6, 6)
         lay.setSpacing(2)
@@ -334,7 +339,8 @@ class RichMenu(QFrame):
     """Graficzne menu: kafelek z ikoną + tytuł + opis w każdym wierszu, nagłówek i separatory (plik, warianty kształtów)."""
 
     def __init__(self, parent, entries, title='', min_width=300):
-        super().__init__(parent, Qt.Popup | Qt.FramelessWindowHint)
+        super().__init__(parent, Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setObjectName('rich')
         lay = QVBoxLayout(self)
         lay.setContentsMargins(8, 8, 8, 8)
