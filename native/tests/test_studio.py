@@ -315,6 +315,19 @@ class StudioTests(unittest.TestCase):
         w.layers.setChecked(False);w.layers.setChecked(True);self.assertTrue(w.view.plane_pick)
         w.set_mode(None)
 
+    def test_text_is_one_selectable_object_with_box_handles_and_curve_edit(self):
+        try:k.text_shape('XY','AB',0,0,10)
+        except Exception:self.skipTest('brak czcionki')
+        w=self.w;w.set_mode('plane');w.plane_picked('XY');w.choose_tool('text');w.sketch_clicked('XY',0,0);self.wait()
+        self.assertEqual(len(w.document.bodies),1);self.assertIsNone(w.tool);self.assertEqual(w.selected,[w.document.bodies[0].id])
+        self.assertIsNotNone(w.view.sketch_box);self.assertEqual(w.document.bodies[0].meta['tool'],'text')
+        box=w.view.sketch_box;xy=w.view.project_one(box['move']);self.assertTrue(w.view.drag_hook('press',*xy))
+        w.view.drag_hook('move',xy[0]+30,xy[1]);w.view.drag_hook('release',xy[0]+30,xy[1]);self.wait()
+        self.assertNotEqual(w.document.bodies[0].meta['points'][0],[0,0])
+        w.choose_tool('arc');w.sketch_clicked('XY',0,20);w.sketch_clicked('XY',5,23);w.sketch_clicked('XY',10,20);self.wait()
+        arc=w.document.bodies[-1];self.assertEqual(arc.meta['tool'],'arc');w.choose_tool(None);w.selected=[arc.id];self.assertTrue(w.open_dim_edit())
+        self.assertEqual([e.text() for e in w.dim_edits if e.isVisible()],['10.0','3.0']);w.dim_panel.hide()
+
     def test_cube_button_picks_sketch_plane_and_grid_adapts(self):
         w=self.w;w.set_mode('plane');w._cube_clicked('X');self.assertEqual((w.mode,w.sketch_plane),('sketch','YZ'))
         w.view.opts['distance']=400;w.view.update();far=w.view._grid_key[0]
