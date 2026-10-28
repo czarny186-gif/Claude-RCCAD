@@ -84,8 +84,8 @@ class StudioTests(unittest.TestCase):
         with patch.object(self.w.view,'pick_profile',return_value=sk.id):self.w.view_clicked(5,5,False,False)
 
     def test_extrude_by_clicking_profile_with_preview(self):
-        w=self.w;self.sketch('rect',(0,0),(20,10));w.set_mode('extrude');w.ex_value.setValue(15)
-        self.pick_sketch_profile(w.document.bodies[0])
+        w=self.w;self.sketch('rect',(0,0),(20,10));w.set_mode('extrude')
+        self.pick_sketch_profile(w.document.bodies[0]);w.ex_value.setValue(15)
         self.assertTrue(w.ex_bar.isVisible());self.preview();self.assertTrue(w.view.preview_items);self.assertTrue(w.view.handles)
         w.apply_extrude();self.wait()
         solids=[b for b in w.document.bodies if b.kind=='solid'];self.assertEqual(len(solids),1)
