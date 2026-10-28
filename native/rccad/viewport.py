@@ -104,6 +104,15 @@ class Overlay2D(QWidget):
                 p.drawEllipse(QPointF(*xy), 4.5, 4.5)
                 p.drawLine(QPointF(xy[0] - 9, xy[1]), QPointF(xy[0] + 9, xy[1]))
                 p.drawLine(QPointF(xy[0], xy[1] - 9), QPointF(xy[0], xy[1] + 9))
+            if v._origin_visible:
+                xy0 = v.project_one((0, 0, 0))
+                if xy0 is not None:
+                    p.setPen(QPen(QColor('#3d4a58'), 1.8))
+                    p.setBrush(QColor('#ffffff'))
+                    p.drawEllipse(QPointF(*xy0), 6.5, 6.5)
+                    p.setBrush(QColor('#8d9aa8'))
+                    p.setPen(Qt.NoPen)
+                    p.drawEllipse(QPointF(*xy0), 2.6, 2.6)
             for g in v.sketch_grips:
                 xy = v.project_one(g)
                 if xy is None:
@@ -307,11 +316,17 @@ class CadView(gl.GLViewWidget):
             self.addItem(grid)
             self.grid_items.append(grid)
         self.grid_item = self.grid_items[-1]
-        for pts, col in (([(-1000, 0, 0), (1000, 0, 0)], (.89, .31, .33, .85)), ([(0, -1000, 0), (0, 1000, 0)], (.14, .64, .42, .85)),
-                         ([(0, 0, 0), (0, 0, 1000)], (.2, .5, .9, .85))):
-            axis = gl.GLLinePlotItem(pos=np.array(pts, dtype=np.float32), color=col, width=2, antialias=True)
-            self.addItem(axis)
-            self.axis_lines.append((axis, np.array(pts[1], float) / 1000.0))
+        self.axis_defs = []
+        for direction, col in (((1, 0, 0), (.89, .31, .33, .95)), ((0, 1, 0), (.14, .64, .42, .95)), ((0, 0, 1), (.2, .5, .9, .95))):
+            direction = np.array(direction, float)
+            solid = gl.GLLinePlotItem(pos=np.array([(0, 0, 0), direction * 100], dtype=np.float32), color=col, width=2.4, antialias=True)
+            dashed = gl.GLLinePlotItem(pos=np.zeros((2, 3), dtype=np.float32), color=col, width=2.0, antialias=True, mode='lines')
+            self.addItem(solid)
+            self.addItem(dashed)
+            self.axis_defs.append((solid, dashed, direction))
+            self.axis_lines.append((solid, direction))
+            self.axis_lines.append((dashed, direction))
+        self._origin_visible = False
         self.custom_plane_items = []
         self.marker_items = []
         self.bodies = ()
@@ -530,21 +545,20 @@ class CadView(gl.GLViewWidget):
 
     # ---------- płaszczyzny (jak w HTML) ----------
     def _build_planes(self):
-        """Płaszczyzny podstawowe w stylu Fusion 360: małe, półprzezroczyste kwadraty z cienkim obrysem; rozmiar zależy od powiększenia."""
+        """Płaszczyzny podstawowe jak punkt początkowy w Fusion 360: trzy brzoskwiniowe, półprzezroczyste kwadraty wychodzące z początku układu."""
         corners = {
-            'XY': [(-1, -1, 0), (1, -1, 0), (1, 1, 0), (-1, 1, 0)],
-            'XZ': [(-1, 0, -1), (1, 0, -1), (1, 0, 1), (-1, 0, 1)],
-            'YZ': [(0, -1, -1), (0, 1, -1), (0, 1, 1), (0, -1, 1)],
+            'XY': [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)],
+            'XZ': [(0, 0, 0), (1, 0, 0), (1, 0, 1), (0, 0, 1)],
+            'YZ': [(0, 0, 0), (0, 1, 0), (0, 1, 1), (0, 0, 1)],
         }
         self._plane_corners = corners
         for name, pts in corners.items():
-            color = pg.mkColor(PLANE_COLORS[name])
-            rgb = (color.redF(), color.greenF(), color.blueF())
+            rgb = (.96, .62, .40)
             fill = gl.GLMeshItem(vertexes=np.array(pts, dtype=np.float32), faces=np.array([[0, 1, 2], [0, 2, 3]]),
-                                 color=(*rgb, .10), smooth=False, drawEdges=False)
+                                 color=(*rgb, .22), smooth=False, drawEdges=False)
             fill.setGLOptions('translucent')
-            outline = gl.GLLinePlotItem(pos=np.array([*pts, pts[0]], dtype=np.float32), color=(*rgb, .75), width=1.6, antialias=True)
-            label = gl.GLTextItem(pos=np.array(pts[2], dtype=np.float32) * .8, text=name, color=QColor(PLANE_COLORS[name]))
+            outline = gl.GLLinePlotItem(pos=np.array([*pts, pts[0]], dtype=np.float32), color=(.88, .50, .26, .95), width=1.6, antialias=True)
+            label = gl.GLTextItem(pos=np.array(pts[2], dtype=np.float32) * .85, text=name, color=QColor('#b8672f'))
             self.plane_items[name] = (fill, outline, label, rgb)
         self._apply_plane_size()
 
@@ -555,7 +569,21 @@ class CadView(gl.GLViewWidget):
         for name, (fill, outline, label, rgb) in self.plane_items.items():
             fill.setTransform(m)
             outline.setTransform(m)
-            label.setData(pos=np.array(self._plane_corners[name][2], dtype=np.float32) * half * .8)
+            label.setData(pos=np.array(self._plane_corners[name][2], dtype=np.float32) * half * .85)
+        self._rebuild_axes()
+
+    def _rebuild_axes(self):
+        """Osie jak w Fusion 360: część dodatnia ciągła, ujemna kreskowana; długość i gęstość kresek zależą od rozmiaru płaszczyzn."""
+        half = self._plane_half
+        length = 30.0 * half
+        dash = half / 7.0
+        for solid, dashed, direction in getattr(self, 'axis_defs', ()):
+            solid.setData(pos=np.array([(0, 0, 0), direction * length], dtype=np.float32))
+            ts = np.arange(0.0, length, 2 * dash)
+            seg = np.empty((len(ts) * 2, 3), dtype=np.float32)
+            seg[0::2] = -np.outer(ts, direction)
+            seg[1::2] = -np.outer(ts + dash, direction)
+            dashed.setData(pos=seg)
 
     def show_planes(self, visible, only=None):
         for name, (fill, outline, label, rgb) in self.plane_items.items():
@@ -566,6 +594,7 @@ class CadView(gl.GLViewWidget):
                 elif not show and item in self.items:
                     self.removeItem(item)
         self._hover_plane = None
+        self._origin_visible = bool(visible and only is None)
         self.update()
 
     def _highlight_plane(self, name):
@@ -573,7 +602,7 @@ class CadView(gl.GLViewWidget):
             return
         self._hover_plane = name
         for key, (fill, outline, label, rgb) in self.plane_items.items():
-            fill.setColor((*rgb, .38 if key == name else .16))
+            fill.setColor((*rgb, .45 if key == name else .22))
         self.update()
 
     def _plane_hit(self, plane, x, y):
@@ -598,8 +627,9 @@ class CadView(gl.GLViewWidget):
                 continue
             hit = self._plane_hit(name, x, y)
             if hit:
-                u, v = kernel.uv_of(name, hit[1])
-                if abs(u) <= self._plane_half and abs(v) <= self._plane_half and (best is None or hit[0] < best[0]):
+                p = np.asarray(hit[1], float)
+                eps = .03 * self._plane_half
+                if np.all(p >= -eps) and np.all(p <= self._plane_half + eps) and (best is None or hit[0] < best[0]):
                     best = (hit[0], name)
         return best[1] if best else None
 

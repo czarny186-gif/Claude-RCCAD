@@ -690,8 +690,8 @@ class StudioWindow(QMainWindow):
     CUBE_PLANES = {'Z': 'XY', '-Z': 'XY', 'X': 'YZ', '-X': 'YZ', 'Y': 'XZ', '-Y': 'XZ'}
 
     def _cube_clicked(self, name):
-        if self.mode in ('plane', 'sketch') and name in self.CUBE_PLANES and not self.busy:
-            # w trybie szkicu ściana kostki wybiera płaszczyznę szkicu (kamera patrzy na nią z wybranej strony)
+        if self.mode == 'plane' and name in self.CUBE_PLANES and not self.busy:
+            # przy wyborze płaszczyzny ściana kostki wybiera płaszczyznę szkicu (kamera patrzy na nią z wybranej strony)
             self.enter_sketch(self.CUBE_PLANES[name])
             self.view.set_view(name)
             self._mark_view(name)
@@ -701,7 +701,14 @@ class StudioWindow(QMainWindow):
 
     def _planes_toggled(self, on):
         self._planes_visible = on
-        if self.mode != 'plane':
+        if self.mode == 'sketch':
+            # zmiana płaszczyzny w trakcie szkicu: kliknij płaszczyznę lub ścianę
+            self.view.show_planes(on)
+            self.view.plane_pick = bool(on)
+            self.view.setCursor(Qt.PointingHandCursor if on else Qt.ArrowCursor)
+            if on:
+                self.toast('Kliknij płaszczyznę lub płaską ścianę, aby szkicować gdzie indziej.', 3500)
+        elif self.mode != 'plane':
             self.view.show_planes(on)
 
     def _xray_toggled(self, on):
@@ -721,7 +728,15 @@ class StudioWindow(QMainWindow):
             return
         target = 'plane' if key == 'sketch' else key
         current = 'plane' if self.mode == 'sketch' else self.mode
-        self.set_mode(None if current == target else target)
+        if current == target:
+            self.set_mode(None)
+            return
+        self.set_mode(target)
+        # płaszczyznę wybieramy tylko na początku szkicowania; potem szkic wraca na ostatnią (zmiana: kostka, przycisk płaszczyzn albo ściana)
+        last = getattr(self, '_last_sketch_plane', None)
+        if target == 'plane' and last is not None:
+            self.enter_sketch(last)
+            self.toast('Szkic na poprzedniej płaszczyźnie. Zmiana: kostka widoku lub przycisk płaszczyzn.', 3500)
 
     def set_mode(self, mode):
         """Przełącza narzędzie; None = zwykłe zaznaczanie."""
@@ -873,6 +888,7 @@ class StudioWindow(QMainWindow):
 
     def enter_sketch(self, plane):
         self.mode = 'sketch'
+        self._last_sketch_plane = plane
         self.sketch_plane = plane
         self.view.plane_pick = False
         self.view.sketch_plane = plane
@@ -1561,6 +1577,11 @@ class StudioWindow(QMainWindow):
             self.view.set_preview_mesh(kernel.display_mesh(face) if face is not None else None, **blue)
     def view_clicked(self, x, y, shift, ctrl):
         if self.busy:
+            return
+        if self.mode == 'sketch' and self.view.plane_pick:
+            plane, _ = self.pick_surface(x, y)
+            if plane is not None:
+                self.enter_sketch(plane)
             return
         if self.mode == 'sketch':
             if self.tool is None and self.selected:

@@ -306,6 +306,15 @@ class StudioTests(unittest.TestCase):
         w._tool_clicked('circle');self.assertEqual(w.tool,'circle');self.assertEqual(w.selected,[])
         w._tool_clicked('circle');self.assertIsNone(w.tool)
 
+    def test_fusion_planes_axes_and_remembered_sketch_plane(self):
+        w=self.w;v=w.view;v.show_planes(True);self.assertTrue(v._origin_visible)
+        xy=v.project_one((2,2,0));self.assertEqual(v.plane_at(*xy) in ('XY','XZ','YZ'),True)
+        xn=v.project_one((-5,-5,0));self.assertIsNone(v.plane_at(*xn))
+        self.sketch('rect',(0,0),(5,5));w.set_mode(None)
+        w.toggle_mode('sketch');self.assertEqual((w.mode,w.sketch_plane),('sketch','XY'))
+        w.layers.setChecked(False);w.layers.setChecked(True);self.assertTrue(w.view.plane_pick)
+        w.set_mode(None)
+
     def test_cube_button_picks_sketch_plane_and_grid_adapts(self):
         w=self.w;w.set_mode('plane');w._cube_clicked('X');self.assertEqual((w.mode,w.sketch_plane),('sketch','YZ'))
         w.view.opts['distance']=400;w.view.update();far=w.view._grid_key[0]
