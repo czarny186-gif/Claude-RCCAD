@@ -292,6 +292,9 @@ class OverLine(gl.GLLinePlotItem):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.setDepthValue(10)
+        # jawne opcje GL: bez testu głębokości i ze zwykłym mieszaniem (nie addytywnym) - kolor linii zawsze taki sam, niezależnie od tła i ściany pod spodem
+        self.setGLOptions({GL.GL_DEPTH_TEST: False, GL.GL_BLEND: True, GL.GL_ALPHA_TEST: False, GL.GL_CULL_FACE: False,
+                           'glBlendFunc': (GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)})
 
 
 def _segments(chains):
