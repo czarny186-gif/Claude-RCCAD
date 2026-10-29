@@ -7,7 +7,7 @@ import numpy as np
 from PySide6.QtCore import QEvent, QObject, QPoint, QRunnable, QSize, Qt, QThreadPool, QTimer, Signal
 from PySide6.QtGui import QCursor, QFont, QFontDatabase, QIcon, QKeySequence, QMatrix4x4, QShortcut
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFontComboBox, QDoubleSpinBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
-                               QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QToolButton, QVBoxLayout, QWidget)
+                               QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QToolButton, QVBoxLayout, QWidget)
 from . import kernel
 from . import shell_ui as ui
 from . import snap as snapping
@@ -323,7 +323,47 @@ class StudioWindow(QMainWindow):
         self.grid_button.setToolTip('Pokaż / ukryj siatkę')
         self.grid_button.toggled.connect(lambda on: self.view.set_grid_visible(on))
         pl.addWidget(self.grid_button)
+        self.hist_button = QToolButton()
+        self.hist_button.setObjectName('padTool')
+        self.hist_button.setIcon(ui.style_icon('history', 28))
+        self.hist_button.setIconSize(QSize(28, 28))
+        self.hist_button.setCheckable(True)
+        self.hist_button.setFixedSize(46, 44)
+        self.hist_button.setToolTip('Historia: kroki projektu, powrót do dowolnego etapu')
+        self.hist_button.toggled.connect(self._hist_toggled)
+        pl.addWidget(self.hist_button)
         ui.shadow(self.pad, 19, 5, 43)
+
+        # historia: pasek kroków na dole okna (każda operacja = krok; klik przeskakuje do stanu z tego momentu)
+        self.hist_bar = QFrame(v)
+        self.hist_bar.setObjectName('bar')
+        hl = QHBoxLayout(self.hist_bar)
+        hl.setContentsMargins(8, 6, 8, 6)
+        hl.setSpacing(8)
+        title = QLabel()
+        title.setPixmap(ui.icons.pixmap('x_history', 26))
+        hl.addWidget(title)
+        self.hist_scroll = QScrollArea()
+        self.hist_scroll.setFrameShape(QFrame.NoFrame)
+        self.hist_scroll.setWidgetResizable(True)
+        self.hist_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.hist_scroll.setFixedHeight(46)
+        self.hist_scroll.setStyleSheet('QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }')
+        self.hist_inner = QWidget()
+        self.hist_row = QHBoxLayout(self.hist_inner)
+        self.hist_row.setContentsMargins(0, 0, 0, 0)
+        self.hist_row.setSpacing(6)
+        self.hist_scroll.setWidget(self.hist_inner)
+        hl.addWidget(self.hist_scroll, 1)
+        self.hist_ghost = QPushButton('Pokaż wygaszone')
+        self.hist_ghost.setObjectName('chip')
+        self.hist_ghost.setCheckable(True)
+        self.hist_ghost.setToolTip('Wygaszone szkice (użyte do wyciągnięcia) pokazują się ponownie')
+        self.hist_ghost.toggled.connect(lambda *_: self.refresh())
+        hl.addWidget(self.hist_ghost)
+        self.hist_bar.hide()
+        self._hist_sig = None
+        ui.shadow(self.hist_bar, 19, 5, 43)
         self.pad.adjustSize()
 
         # edytor transformacji nad paskiem
@@ -763,6 +803,9 @@ class StudioWindow(QMainWindow):
         self.pad.move((W - self.pad.width()) // 2, H - 113 - self.pad.height())
         self.t_editor.adjustSize()
         self.t_editor.move(max(10, (W - self.t_editor.width()) // 2), H - 166 - self.t_editor.height())
+        self.hist_bar.setFixedWidth(max(300, min(W - 460, 1100)))
+        self.hist_bar.adjustSize()
+        self.hist_bar.move((W - self.hist_bar.width()) // 2, H - 18 - self.hist_bar.height())
         self.sk_bar.adjustSize()
         self.sk_bar.move(max(450, (W - self.sk_bar.width()) // 2), 18)
         self.origin_label.adjustSize()
@@ -778,7 +821,7 @@ class StudioWindow(QMainWindow):
         self.ex_panel.move(18, 170)
         self.ex_bar.adjustSize()
         self.ex_bar.move(346, 170)
-        for w in (*self.tools.values(), self.shape_bar, self.clear_button, self.undo_button, self.redo_button, self.layers, self.xray, self.home, self.cube, self.pad,
+        for w in (*self.tools.values(), self.shape_bar, self.clear_button, self.undo_button, self.redo_button, self.layers, self.xray, self.home, self.cube, self.pad, self.hist_bar,
                   self.t_editor, self.sk_bar, self.origin_label, *self.panels, self.dim_panel, self.dim, self.notice):
             w.raise_()
 
@@ -2228,17 +2271,39 @@ class StudioWindow(QMainWindow):
         self.run_preview('extrude', compute, show)
         if self._hv is None:
             self._place_extrude_handle()
+    def _consumed_sketches(self, profiles):
+        """Id szkiców, z których powstały wybrane profile (cały szkic albo obszar leżący w jego obrysie)."""
+        ids = set()
+        for prof in profiles:
+            if prof.get('kind') == 'sketch' and prof.get('id'):
+                ids.add(prof['id'])
+            elif prof.get('kind') == 'region' and prof.get('face') is not None:
+                c = np.array(prof['center'], float)
+                for _, bodies in self._drawn_sketches().values():
+                    for b in bodies:
+                        try:
+                            box = kernel.bounds(b.shape)
+                            if all(lo - 1e-3 <= v <= hi + 1e-3 for v, lo, hi in zip(c, (box.xmin, box.ymin, box.zmin), (box.xmax, box.ymax, box.zmax))):
+                                ids.add(b.id)
+                        except Exception:
+                            pass
+        return ids
+
     def apply_extrude(self):
         if self.busy or not self.ex_profiles:
             return
         op = self.ex_op.currentData()
         makers = self._make_tools()
         existing = list(self.document.bodies)
+        spent = self._consumed_sketches(self.ex_profiles)
+
+        def fade(bodies):      # użyty szkic wygasa: widać tylko nowe, a stary wraca z historii albo przyciskiem „Pokaż wygaszone"
+            return [replace(b, visible=False) if b.id in spent else b for b in bodies]
 
         def build():
             tools = [m() for m in makers]
             if op == 'new':
-                return [*existing, *[Body('Wyciągnięcie', t).prepared() for t in tools]]
+                return fade([*existing, *[Body('Wyciągnięcie', t).prepared() for t in tools]])
             bodies = list(existing)
             used = False
             for tool in tools:
@@ -2258,7 +2323,7 @@ class StudioWindow(QMainWindow):
                         continue
             if not used:
                 raise kernel.CadError('Nie ma bryły, z którą można wykonać tę operację. Profil musi dotykać bryły lub ją przecinać.')
-            return bodies
+            return fade(bodies)
 
         def apply(bodies):
             self.document.commit(bodies)
@@ -2266,7 +2331,7 @@ class StudioWindow(QMainWindow):
 
         self.view.set_preview_mesh(None)
         self.view.set_handles([])
-        self.run_operation('Wyciąganie', build, apply, after=lambda: self.set_mode(None))
+        self.run_operation({'cut': 'Wycięcie', 'join': 'Wyciągnięcie (dodaj)', 'intersect': 'Część wspólna'}.get(op, 'Wyciągnięcie'), build, apply, after=lambda: self.set_mode(None))
 
     # =====================================================================
     # boolean
@@ -3077,6 +3142,9 @@ class StudioWindow(QMainWindow):
         self.selected = [i for i in self.selected if i in live]
         self.edges = {i: es for i, es in self.edges.items() if i in live}
         bodies = [self.override.get(b.id, b) for b in self.document.bodies]
+        if self.hist_ghost.isChecked():       # wygaszone szkice wracają do widoku
+            bodies = [replace(b, visible=True) if (b.kind == 'sketch' and not b.visible) else b for b in bodies]
+        self._hist_update()
         self.view.set_models(bodies, self.selected, self.edges)
         if fit:
             self.view.fit_all()
@@ -3084,6 +3152,51 @@ class StudioWindow(QMainWindow):
         self.redo_button.setEnabled(self.document.can_redo and not self.busy)
         name = self.document.path.name if self.document.path else 'Nowy projekt'
         self.setWindowTitle(f"{'● ' if self.document.dirty else ''}{name} — RCCAD")
+
+    # ---------- historia ----------
+    def _hist_toggled(self, on):
+        self.hist_bar.setVisible(on)
+        self._hist_sig = None
+        self._hist_update()
+        self._layout_overlays()
+
+    def _hist_update(self):
+        if not self.hist_bar.isVisible():
+            return
+        labels, current = self.document.timeline()
+        sig = (tuple(labels), current)
+        if sig == self._hist_sig:
+            return
+        self._hist_sig = sig
+        while self.hist_row.count():
+            item = self.hist_row.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        active = None
+        for i, text in enumerate(labels):
+            chip = QPushButton(f'{i}  {text}' if i else text)
+            chip.setObjectName('chip')
+            chip.setCheckable(True)
+            chip.setChecked(i == current)
+            chip.setToolTip('Wróć do tego kroku' if i != current else 'Bieżący krok')
+            if i > current:      # cofnięte kroki: przyciemnione, można do nich wrócić
+                chip.setStyleSheet('QPushButton#chip { color:#9fb2c4; border-style:dashed; }')
+            chip.clicked.connect(lambda _=False, n=i: self.history_goto(n))
+            self.hist_row.addWidget(chip)
+            if i == current:
+                active = chip
+        self.hist_row.addStretch(1)
+        if active is not None:
+            QTimer.singleShot(0, lambda a=active: self.hist_scroll.ensureWidgetVisible(a, 40, 0) if a.parent() else None)
+
+    def history_goto(self, index):
+        if self.busy:
+            return
+        if self.mode is not None:
+            self.set_mode(None)
+        self.document.goto(index)
+        self.selected, self.edges = [], {}
+        self.refresh()
 
     def run_operation(self, label, function, apply, fit=False, after=None):
         if self.busy:
@@ -3098,10 +3211,12 @@ class StudioWindow(QMainWindow):
 
         def done(value):
             try:
+                self.document.pending_label = label
                 apply(value)
             except Exception as exc:
                 self.toast(str(exc))
             finally:
+                self.document.pending_label = None
                 finish()
                 self.refresh(fit)
                 if after:

@@ -112,6 +112,10 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
                 p.drawRoundedRect(QRectF(5 + c * 13.5, 10 + r * 15, 10, 10), 2.4, 2.4)
         p.setPen(pen(ORANGE, 2.8)); p.drawLine(QPointF(10, 38), QPointF(38, 38))
         p.setBrush(QColor(ORANGE)); p.setPen(Qt.NoPen); p.drawPolygon(QPolygonF([QPointF(43, 38), QPointF(35, 33.5), QPointF(35, 42.5)]))
+    elif kind == 'x_history':
+        p.setBrush(QColor('#ffffff')); p.setPen(pen(BLUE, 2.4)); p.drawEllipse(QPointF(24, 24), 16, 16)
+        p.setPen(pen(ORANGE, 2.8)); p.drawLine(QPointF(24, 24), QPointF(24, 13)); p.drawLine(QPointF(24, 24), QPointF(32, 28))
+        p.setPen(pen(BLUE, 2.6)); p.drawPolyline(QPolygonF([QPointF(5, 13), QPointF(8, 23), QPointF(17, 19)]))
     elif kind == 'x_pat_circ':
         pn = pen(ORANGE, 2.0); pn.setStyle(Qt.DashLine); p.setPen(pn); p.setBrush(Qt.NoBrush); p.drawEllipse(QPointF(24, 24), 15, 15)
         for k in range(6):
@@ -279,6 +283,10 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             for r in range(2):
                 for c in range(2):
                     fl(_rounded(7 + c * 18, 7 + r * 18, 14, 14, 3), QColor(acc) if (r, c) == (0, 0) else soft)
+        elif name == 'history':
+            st(ink, 2.4); p.setBrush(Qt.NoBrush); p.drawEllipse(QPointF(24, 24), 16, 16)
+            st(acc, 3.0); p.drawLine(QPointF(24, 24), QPointF(24, 13)); p.drawLine(QPointF(24, 24), QPointF(32, 28))
+            st(acc, 3.0); p.drawPolyline(poly([(6, 12), (8, 21), (16, 18)]))
         elif name == 'layers':
             for k, y in enumerate((30, 20, 10)):
                 q = poly([(24, y + 8), (42, y), (24, y - 8 + 0), (6, y)])

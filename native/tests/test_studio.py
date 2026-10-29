@@ -184,6 +184,16 @@ class StudioTests(unittest.TestCase):
         with patch.object(w.view,'nearest_vertex',return_value=None),patch.object(w.view,'pick_face',return_value=None),patch.object(w.view,'plane_at',return_value=None),patch.object(w.view,'_ray',return_value=(np.array([0,0,10.]),np.array([0,0,-1.]))):
             self.assertTrue(np.allclose(w._pattern_target(5,5),[0,0,0]))
 
+    def test_history_timeline_fades_used_sketch_and_jumps_between_steps(self):
+        w=self.w;self.sketch('rect',(0,0),(20,10));sk=w.document.bodies[0];w.set_mode('extrude');self.pick_sketch_profile(sk)
+        w.ex_value.setValue(5);w.apply_extrude();self.wait()
+        self.assertFalse(w.document.get(sk.id).visible)               # wykorzystany szkic wygasa
+        labels,cur=w.document.timeline();self.assertEqual(cur,len(labels)-1);self.assertEqual(labels[-1],'Wyciągnięcie');self.assertGreaterEqual(len(labels),3)
+        w.hist_button.setChecked(True);self.app.processEvents();self.assertTrue(w.hist_bar.isVisible());self.assertGreaterEqual(w.hist_row.count(),len(labels))
+        w.hist_ghost.setChecked(True);self.assertTrue(w.view._cache[sk.id][1])
+        w.history_goto(cur-1);self.assertTrue(w.document.get(sk.id).visible);self.assertEqual(len([b for b in w.document.bodies if b.kind=='solid']),0)
+        w.history_goto(cur);self.assertEqual(len([b for b in w.document.bodies if b.kind=='solid']),1)
+
     def test_chamfer(self):
         w=self.w;a=Body('A',k.box(20,20,20)).prepared();w.document.commit([a]);w.refresh();w.set_mode('mod');w.mod_kind.setCurrentIndex(1)
         w.edges={a.id:{0}};w.mod_size.setValue(2);w.apply_mod();self.wait();self.assertLess(w.document.bodies[0].shape.Volume(),8000)

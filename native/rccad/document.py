@@ -33,12 +33,14 @@ class Body:
 class Document:
     def __init__(self):
         self.bodies: tuple[Body, ...] = ()
-        self._undo = []
+        self._undo = []      # (bryły, rewizja, etykieta) stanów PRZED bieżącym
         self._redo = []
+        self.label = 'Początek'
         self.path: Path | None = None
         self._revision = 0
         self._saved_revision = 0
         self._next_revision = 1
+        self.pending_label = None
 
     @property
     def dirty(self):
@@ -55,26 +57,56 @@ class Document:
     def get(self, body_id):
         return next((b for b in self.bodies if b.id == body_id), None)
 
-    def commit(self, bodies):
+    @staticmethod
+    def _auto_label(before, after):
+        old, new = {b.id: b for b in before}, {b.id: b for b in after}
+        added = [b for i, b in new.items() if i not in old]
+        removed = [b for i, b in old.items() if i not in new]
+        changed = [b for i, b in new.items() if i in old and (old[i].shape is not b.shape or old[i].visible != b.visible or old[i].name != b.name)]
+        if added and not removed:
+            return f'Dodano: {added[0].name}' + (f' (+{len(added) - 1})' if len(added) > 1 else '')
+        if removed and not added:
+            return f'Usunięto: {removed[0].name}' + (f' (+{len(removed) - 1})' if len(removed) > 1 else '')
+        if changed:
+            return f'Zmieniono: {changed[0].name}' + (f' (+{len(changed) - 1})' if len(changed) > 1 else '')
+        return 'Zmiana'
+
+    def commit(self, bodies, label=None):
         bodies = tuple(bodies)
         if len({b.id for b in bodies}) != len(bodies):
             raise CadError("Powtórzony identyfikator obiektu.")
-        self._undo.append((self.bodies, self._revision))
-        self._undo = self._undo[-40:]
+        self._undo.append((self.bodies, self._revision, self.label))
+        self._undo = self._undo[-200:]
         self._redo.clear()
+        self.label = label or self.pending_label or self._auto_label(self.bodies, bodies)
+        self.pending_label = None
         self.bodies = bodies
         self._revision = self._next_revision
         self._next_revision += 1
 
     def undo(self):
         if self._undo:
-            self._redo.append((self.bodies, self._revision))
-            self.bodies, self._revision = self._undo.pop()
+            self._redo.append((self.bodies, self._revision, self.label))
+            self.bodies, self._revision, self.label = self._undo.pop()
 
     def redo(self):
         if self._redo:
-            self._undo.append((self.bodies, self._revision))
-            self.bodies, self._revision = self._redo.pop()
+            self._undo.append((self.bodies, self._revision, self.label))
+            self.bodies, self._revision, self.label = self._redo.pop()
+
+    # ---------- historia: oś czasu stanów (niezmienne bryły, więc przeskok jest natychmiastowy) ----------
+    def timeline(self):
+        """(etykiety, indeks bieżącego): stany od najstarszego do najnowszego, razem z cofniętymi (redo)."""
+        labels = [e[2] for e in self._undo] + [self.label] + [e[2] for e in reversed(self._redo)]
+        return labels, len(self._undo)
+
+    def goto(self, index):
+        labels, current = self.timeline()
+        index = max(0, min(index, len(labels) - 1))
+        while current > index:
+            self.undo(); current -= 1
+        while current < index:
+            self.redo(); current += 1
 
     def save(self, path):
         path = Path(path)
