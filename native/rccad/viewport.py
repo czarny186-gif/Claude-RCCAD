@@ -286,6 +286,19 @@ class OffsetMesh(gl.GLMeshItem):
             GL.glDisable(GL.GL_POLYGON_OFFSET_FILL)
 
 
+class OverLine(gl.GLLinePlotItem):
+    """Linie szkicu: głębokość lekko ściśnięta ku kamerze, więc szkic na ścianie bryły nie ginie w z-fightingu, a nadal jest zasłaniany przez bryłę z przodu."""
+
+    def paint(self):
+        GL.glDepthRange(0.0, 0.995)
+        GL.glDepthFunc(GL.GL_LEQUAL)
+        try:
+            super().paint()
+        finally:
+            GL.glDepthRange(0.0, 1.0)
+            GL.glDepthFunc(GL.GL_LESS)
+
+
 def _segments(chains):
     """Wiele łamanych -> jedna tablica odcinków (tryb 'lines'): jedno wywołanie rysowania zamiast setek (płynny obrót modelu z tekstem)."""
     parts = []
@@ -549,7 +562,7 @@ class CadView(gl.GLViewWidget):
                     seg = _segments([pts for index, pts in mesh.edges.items() if (index in sel or picked) == hot])
                     if seg is None:
                         continue
-                    line = gl.GLLinePlotItem(pos=seg, color=color_, width=width_, antialias=True, mode='lines')
+                    line = (OverLine if body.kind == 'sketch' else gl.GLLinePlotItem)(pos=seg, color=color_, width=width_, antialias=True, mode='lines')
                     if body.kind != 'sketch':
                         line.setGLOptions('additive' if self.xray else 'translucent')
                     self.addItem(line)
@@ -715,7 +728,7 @@ class CadView(gl.GLViewWidget):
             body = next((b for b in self.bodies if b.id == hit[0]), None)
             points = body.mesh.edges.get(hit[1]) if body and body.mesh else None
             if points is not None:
-                self._hover_item = gl.GLLinePlotItem(pos=points, color=(1, .65, .2, 1), width=5, antialias=True)
+                self._hover_item = OverLine(pos=points, color=(1, .65, .2, 1), width=5, antialias=True)
                 self.addItem(self._hover_item)
         self.update()
 
@@ -732,7 +745,7 @@ class CadView(gl.GLViewWidget):
         if body is not None and body.mesh is not None:
             seg = _segments(body.mesh.edges.values())
             if seg is not None:
-                self._hover_item = gl.GLLinePlotItem(pos=seg, color=(1, .65, .2, 1), width=5, antialias=True, mode='lines')
+                self._hover_item = OverLine(pos=seg, color=(1, .65, .2, 1), width=5, antialias=True, mode='lines')
                 self.addItem(self._hover_item)
         self.update()
 
