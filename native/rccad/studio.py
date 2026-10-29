@@ -3159,6 +3159,8 @@ class StudioWindow(QMainWindow):
         if self.hist_ghost.isChecked():       # wygaszone szkice wracają do widoku
             bodies = [replace(b, visible=True) if (b.kind == 'sketch' and not b.visible) else b for b in bodies]
         self._hist_update()
+        if self.document.deferred and not self.busy:
+            self._replay_deferred()
         self.view.set_models(bodies, self.selected, self.edges)
         if fit:
             self.view.fit_all()
@@ -3264,6 +3266,23 @@ class StudioWindow(QMainWindow):
                 self.toast(f'{failed} kroków nie dało się przeliczyć (oznaczone na czerwono) - popraw je albo cofnij zmianę.', 7000)
 
         self.run_operation('Przeliczanie historii', lambda: change(states), apply)
+
+    def _replay_deferred(self):
+        """Operacja wykonana po przeskoku w historii została wstawiona w środek: późniejsze kroki liczymy od nowa na jej wyniku (w tle)."""
+        prev, future = self.document.deferred
+        self.document.deferred = None
+        current, steps, before = self.document.bodies, [], prev
+        for bodies, info in future:
+            steps.append((before, bodies, info))
+            before = bodies
+
+        def apply(result):
+            tail, failed = result
+            self.document.append_states(tail)
+            self.selected, self.edges = [], {}
+            self.toast(f'Wstawiono krok w środek historii, {failed} kroków wymaga poprawy (czerwone).' if failed else 'Wstawiono krok w środek historii, następne kroki przeliczone.', 4500)
+
+        self.run_operation('Przeliczanie historii', lambda: hist.rebuild(current, steps), apply)
 
     def history_revert(self):
         if self.busy or not self.document.backup:

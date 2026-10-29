@@ -44,6 +44,8 @@ class Document:
         self.pending_label = None
         self.pending_icon = None
         self.pending_op = None
+        self.keep_future = False   # po przeskoku w historii nowa operacja wstawia się w środek, a późniejsze kroki są przeliczane
+        self.deferred = None       # (stan sprzed wstawienia, późniejsze kroki) do przeliczenia w tle
 
     @property
     def dirty(self):
@@ -90,6 +92,9 @@ class Document:
             info['op'] = op
         self._undo.append((self.bodies, self._revision, self.info))
         self._undo = self._undo[-200:]
+        if self.keep_future and self._redo:
+            self.deferred = (self.bodies, [(e[0], e[2]) for e in reversed(self._redo)])
+        self.keep_future = False
         self._redo.clear()
         self.info = info
         self.pending_label = self.pending_icon = self.pending_op = None
@@ -97,12 +102,19 @@ class Document:
         self._revision = self._next_revision
         self._next_revision += 1
 
+    def append_states(self, tail):
+        """Dokleja przeliczone późniejsze kroki za bieżący i ustawia widok na ostatnim."""
+        states = self.states() + list(tail)
+        self._set_states(states, len(states) - 1)
+
     def undo(self):
+        self.keep_future = False
         if self._undo:
             self._redo.append((self.bodies, self._revision, self.info))
             self.bodies, self._revision, self.info = self._undo.pop()
 
     def redo(self):
+        self.keep_future = False
         if self._redo:
             self._undo.append((self.bodies, self._revision, self.info))
             self.bodies, self._revision, self.info = self._redo.pop()
@@ -138,6 +150,7 @@ class Document:
         self.bodies, self.info = states[current]
         self._redo = [(b, revisions[i], inf) for i, (b, inf) in reversed(list(enumerate(states))[current + 1:])]
         self._revision = revisions[current]
+        self.keep_future, self.deferred = False, None
 
     def goto(self, index):
         labels, current = self.timeline()
@@ -146,6 +159,7 @@ class Document:
             self.undo(); current -= 1
         while current < index:
             self.redo(); current += 1
+        self.keep_future = index < len(labels) - 1
 
     @staticmethod
     def _entry(body, shape_index):

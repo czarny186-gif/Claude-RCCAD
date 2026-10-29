@@ -207,6 +207,15 @@ class StudioTests(unittest.TestCase):
         w.history_revert();self.assertAlmostEqual(vol(),1600,2)
         w.hist_button.setChecked(True);self.app.processEvents();self.assertGreaterEqual(w.hist_row.count(),last+1)
 
+    def test_operation_after_history_jump_is_inserted_and_later_steps_recomputed(self):
+        w=self.w;self.sketch('rect',(0,0),(20,10));sk=w.document.bodies[0];w.set_mode('extrude');self.pick_sketch_profile(sk)
+        w.ex_value.setValue(5);w.apply_extrude();self.wait();before=len(w.document.infos()[0])
+        w.history_goto(1);self.assertTrue(w.document.keep_future)
+        self.sketch('circle',(40,0),(45,0));self.wait()
+        infos,cur=w.document.infos();self.assertEqual((len(infos),cur),(before+1,len(infos)-1))
+        kinds=[b.kind for b in w.document.bodies];self.assertEqual(kinds.count('solid'),1);self.assertGreaterEqual(kinds.count('sketch'),2)
+        self.assertEqual(infos[-1]['icon'],'extrude');self.assertFalse(w.document.keep_future)
+
     def test_chamfer(self):
         w=self.w;a=Body('A',k.box(20,20,20)).prepared();w.document.commit([a]);w.refresh();w.set_mode('mod');w.mod_kind.setCurrentIndex(1)
         w.edges={a.id:{0}};w.mod_size.setValue(2);w.apply_mod();self.wait();self.assertLess(w.document.bodies[0].shape.Volume(),8000)
