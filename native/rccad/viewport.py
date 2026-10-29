@@ -130,6 +130,15 @@ class Overlay2D(QWidget):
                         p.setPen(QPen(QColor('#ffffff'), 2))
                         p.setBrush(QColor('#e5262b'))
                         p.drawEllipse(QPointF(*rot), 8, 8)
+            if v.hover_vertex is not None or v.sel_vertices:
+                p.setRenderHint(QPainter.Antialiasing)
+                for pt, chosen in [*((q, True) for q in v.sel_vertices), *(((v.hover_vertex, False),) if v.hover_vertex is not None else ())]:
+                    xy = v.project_one(pt)
+                    if xy is None:
+                        continue
+                    p.setPen(QPen(QColor('#ffffff'), 2))
+                    p.setBrush(QColor('#f09a22') if chosen else QColor(240, 154, 34, 120))
+                    p.drawEllipse(QPointF(*xy), 7.5 if chosen else 9, 7.5 if chosen else 9)
             for g in v.sketch_grips:
                 xy = v.project_one(g)
                 if xy is None:
@@ -300,6 +309,7 @@ class CadView(gl.GLViewWidget):
     sketchClicked = Signal(object, float, float)
     viewClicked = Signal(float, float, bool, bool)  # x, y, Shift, Ctrl
     viewHover = Signal(float, float)
+    viewDoubleClicked = Signal(float, float)
     bodyClicked = Signal(str, bool)
     selectionCleared = Signal()
     contextRequested = Signal(float, float)
@@ -386,6 +396,9 @@ class CadView(gl.GLViewWidget):
         self.sketch_centers = []
         self.sketch_grips = []
         self.sketch_box = None
+        self.hover_vertex = None
+        self.sel_vertices = []
+        self._dbl = False
         self.drag_hook = None
         self._hook_active = False
         self.snap_marker = None       # ((x, y), etykieta) - przyciąganie jak w wersji HTML
@@ -1105,6 +1118,29 @@ class CadView(gl.GLViewWidget):
                         distance, best = float(dist[j]), (body.id, index)
         return best
 
+    def nearest_vertex(self, x, y, radius=11.0):
+        """Wierzchołek bryły (koniec krawędzi) najbliżej kursora: (id bryły, punkt 3D) albo None."""
+        best = None
+        for body in self.bodies:
+            if not body.visible or not body.mesh or body.kind != 'solid':
+                continue
+            ends = {}
+            for points in body.mesh.edges.values():
+                for q in (points[0], points[-1]):
+                    ends[tuple(np.round(q, 3))] = q
+            if not ends:
+                continue
+            pts = np.array(list(ends.values()), dtype=float)
+            xy, z, w = self.project_points(pts)
+            if len(xy) != len(pts):
+                continue
+            dist = np.linalg.norm(xy - [x, y], axis=1)
+            dist[w <= 0] = np.inf
+            j = int(np.argmin(dist))
+            if dist[j] < radius and (best is None or dist[j] < best[0]) and (self.xray or self._visible_point(pts[j])):
+                best = (float(dist[j]), body.id, pts[j])
+        return None if best is None else (best[1], best[2])
+
     def _ray(self, x, y):
         inverse, ok = (self.camera_matrix()).inverted()
         if not ok:
@@ -1268,7 +1304,19 @@ class CadView(gl.GLViewWidget):
             return
         super().mousePressEvent(event)
 
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.LeftButton and self.click_mode and not event.modifiers() & Qt.ShiftModifier:
+            self._dbl = True
+            self.viewDoubleClicked.emit(event.position().x(), event.position().y())
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
     def mouseReleaseEvent(self, event):
+        if self._dbl:
+            self._dbl = False
+            event.accept()
+            return
         if self._hook_active:
             self._hook_active = False
             self.drag_hook('release', event.position().x(), event.position().y())

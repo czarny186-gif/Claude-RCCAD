@@ -163,6 +163,8 @@ class StudioWindow(QMainWindow):
         self.view.sketchClicked.connect(self.sketch_clicked)
         self.view.viewClicked.connect(self.view_clicked)
         self.view.viewHover.connect(self.view_hover)
+        self.view.viewDoubleClicked.connect(self.view_double_clicked)
+        self._mod_face_mesh = None
         self.view.contextRequested.connect(self.context_menu)
         self.view.handleDragged.connect(self.handle_dragged)
         self.view.handleReleased.connect(self.handle_released)
@@ -548,7 +550,7 @@ class StudioWindow(QMainWindow):
         self.mod_size = _spin(3, .01, 1e5, 3, .5)
         lay.addWidget(self.mod_label)
         lay.addWidget(self.mod_size)
-        self.mod_status = _label('Kliknij krawędź (lub kilka krawędzi) bryły.', 'status')
+        self.mod_status = _label('Kliknij krawędź lub narożnik; dwuklik w ścianę zaznacza cały jej obwód.', 'status')
         lay.addWidget(self.mod_status)
         self._buttons(lay, 'Zastosuj', 'Zamknij', self.apply_mod, lambda: self.set_mode(None))
         self.mod_size.valueChanged.connect(lambda *_: self._mod_value_changed())
@@ -803,6 +805,9 @@ class StudioWindow(QMainWindow):
             return
         self.override = {}
         self.txt = None
+        self._mod_face_mesh = None
+        self.view.sel_vertices = []
+        self.view.hover_vertex = None
         self.view.sketch_box = None
         self.view.clear_body_matrices()
         self.cancel_previews()
@@ -1754,7 +1759,10 @@ class StudioWindow(QMainWindow):
             elif self.mode == 'mirror' and self.mirror_id and self.mirror_frame is None:
                 self._hover_face_only(x, y)
             elif self.mode == 'mod':
-                self.view._set_hover_edge(self.view.nearest_edge(x, y, True))
+                vertex = self.view.nearest_vertex(x, y)
+                self.view.hover_vertex = vertex[1] if vertex else None
+                self.view._set_hover_edge(None if vertex else self.view.nearest_edge(x, y, True))
+                self.view.overlay.update()
             elif self.mode is None and self._planes_visible:
                 name = self.view.plane_at(x, y)
                 self.view._highlight_plane(name)
@@ -2216,33 +2224,84 @@ class StudioWindow(QMainWindow):
             self._place_mod_handle()
 
     def pick_edge(self, x, y, shift, ctrl):
+        vertex = self.view.nearest_vertex(x, y)
+        if vertex is not None:       # narożnik: obejmuje wszystkie krawędzie schodzące się w wierzchołku
+            bid, point = vertex
+            body = self.document.get(bid)
+            if body is None or body.kind != 'solid':
+                return
+            ids = {i for i in kernel.edges_at_point(body.shape, point) if i in body.mesh.edges}
+            if ids:
+                self._mod_select(bid, ids, shift, ctrl, mark=point)
+            return
         hit = self.view.nearest_edge(x, y, True)
         if hit is None:
             if not (shift or ctrl):
                 self.edges = {}
+                self.view.sel_vertices = []
+                self._mod_face_mesh = None
             self.update_mod_status()
             return
         bid, index = hit[0], hit[1]
         body = self.document.get(bid)
         if body is None or body.kind != 'solid':
             return
-        ids = set(kernel.edge_chain(body.shape, index)) if ctrl else {index}
+        self._mod_select(bid, set(kernel.edge_chain(body.shape, index)) if ctrl else {index}, shift, ctrl)
+
+    def _mod_select(self, bid, ids, shift, ctrl, mark=None):
         if not (shift or ctrl) or bid not in self.edges:
             if not any(self.edges.values()):
                 self.mod_size.blockSignals(True)
                 self.mod_size.setValue(2.0)
                 self.mod_size.blockSignals(False)
             self.edges = {bid: set()}
+            self.view.sel_vertices = []
+        self._mod_face_mesh = None
         current = self.edges[bid]
         if (shift or ctrl) and ids <= current:
             current -= ids
+            if mark is not None:
+                self.view.sel_vertices = [q for q in self.view.sel_vertices if float(np.linalg.norm(np.asarray(q) - np.asarray(mark))) > 1e-3]
         else:
             current |= ids
+            if mark is not None:
+                self.view.sel_vertices = [*self.view.sel_vertices, np.asarray(mark, float)]
         self.update_mod_status()
+
+    def view_double_clicked(self, x, y):
+        """Podwójne kliknięcie ściany w trybie edycji bryły: podświetla ścianę i zaznacza wszystkie jej krawędzie (zaokrąglenie / faza na okrągło)."""
+        if self.busy or self.mode != 'mod':
+            return
+        hit = self.view.pick_face(x, y)
+        body = self.document.get(hit[0]) if hit else None
+        if body is None or body.kind != 'solid':
+            return
+        try:
+            face, ids = kernel.face_edge_indices(body.shape, hit[2])
+            ids = {i for i in ids if i in body.mesh.edges}
+            mesh = kernel.display_mesh(face)
+        except Exception:
+            self.toast('Nie udało się zaznaczyć krawędzi ściany.')
+            return
+        if not ids:
+            return
+        if not any(self.edges.values()):
+            self.mod_size.blockSignals(True)
+            self.mod_size.setValue(2.0)
+            self.mod_size.blockSignals(False)
+        self.edges = {body.id: ids}
+        self.view.sel_vertices = []
+        self.update_mod_status()
+        self._mod_face_mesh = mesh
+        self.view.set_selection_meshes([mesh])
 
     def update_mod_status(self):
         count = sum(len(v) for v in self.edges.values())
-        self.mod_status.setText(f'Zaznaczone krawędzie: {count}' if count else 'Kliknij krawędź (lub kilka krawędzi) bryły.')
+        self.mod_status.setText(f'Zaznaczone krawędzie: {count}' if count else 'Kliknij krawędź lub narożnik; dwuklik w ścianę zaznacza cały jej obwód.')
+        if not count:
+            self.view.sel_vertices = []
+            self._mod_face_mesh = None
+        self.view.set_selection_meshes([self._mod_face_mesh] if self._mod_face_mesh is not None and count else None)
         self.refresh()
         self._place_mod_handle()
         self._timers['mod'].start()

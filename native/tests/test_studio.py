@@ -148,6 +148,15 @@ class StudioTests(unittest.TestCase):
         w.mod_size.setValue(2);w.update_mod_preview();self.preview();self.assertTrue(w.view.preview_items)
         w.apply_mod();self.wait();self.assertLess(w.document.bodies[0].shape.Volume(),8000)
 
+    def test_corner_vertex_and_face_double_click_select_edges(self):
+        w=self.w;a=Body('A',k.box(20,20,20)).prepared();w.document.commit([a]);w.refresh();w.set_mode('mod')
+        pt=np.array(a.mesh.edges[0][0],float)
+        with patch.object(w.view,'nearest_vertex',return_value=(a.id,pt)):w.view_clicked(5,5,False,False)
+        self.assertEqual(len(w.edges[a.id]),3);self.assertEqual(len(w.view.sel_vertices),1)
+        with patch.object(w.view,'pick_face',return_value=(a.id,[0,0,1],pt.tolist())):w.view_double_clicked(5,5)
+        self.assertEqual(len(w.edges[a.id]),4);self.assertTrue(w.view.selection_items)
+        w.mod_size.setValue(2);w.apply_mod();self.wait();self.assertLess(w.document.bodies[0].shape.Volume(),8000)
+
     def test_chamfer(self):
         w=self.w;a=Body('A',k.box(20,20,20)).prepared();w.document.commit([a]);w.refresh();w.set_mode('mod');w.mod_kind.setCurrentIndex(1)
         w.edges={a.id:{0}};w.mod_size.setValue(2);w.apply_mod();self.wait();self.assertLess(w.document.bodies[0].shape.Volume(),8000)

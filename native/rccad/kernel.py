@@ -169,6 +169,26 @@ def sketch_from_drag(kind, plane, u0, v0, u1, v1, sides=6):
     raise CadError("Nieznany typ szkicu.")
 
 
+def edges_at_point(shape, point, tol=2e-3):
+    """Indeksy krawędzi bryły schodzących się w wierzchołku `point` (zaokrąglenie / faza narożnika obejmuje wszystkie)."""
+    p = np.asarray(point, dtype=float)
+    out = []
+    for i, edge in enumerate(shape.Edges()):
+        if edge.Length() < 1e-6:
+            continue
+        if any(float(np.linalg.norm(np.array(edge.positionAt(t).toTuple()) - p)) < tol for t in (0.0, 1.0)):
+            out.append(i)
+    return out
+
+
+def face_edge_indices(shape, point):
+    """Ściana najbliższa punktowi i indeksy wszystkich jej krawędzi (do obróbki całego obwodu ściany naraz)."""
+    vertex = cq.Vertex.makeVertex(*[float(c) for c in point])
+    face = min(shape.Faces(), key=lambda f: f.distance(vertex))
+    own = face.Edges()
+    return face, [i for i, e in enumerate(shape.Edges()) if any(e.isSame(o) for o in own)]
+
+
 def edge_chain(shape, index, max_angle=8.0):
     """Indeksy krawędzi tworzących łańcuch styczny (G1) z krawędzią `index` - jak Shift+klik w wersji HTML."""
     edges = shape.Edges()
