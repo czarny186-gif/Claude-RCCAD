@@ -290,11 +290,24 @@ class OverLine(gl.GLLinePlotItem):
     """Linie szkicu: głębokość lekko ściśnięta ku kamerze, więc szkic na ścianie bryły nie ginie w z-fightingu, a nadal jest zasłaniany przez bryłę z przodu."""
 
     def paint(self):
-        GL.glDepthRange(0.0, 0.995)
+        GL.glDepthRange(0.0, 0.998)
         GL.glDepthFunc(GL.GL_LEQUAL)
+        GL.glPushMatrix()
         try:
+            view = self.view()
+            if view is not None:   # dodatkowo unosimy linie ku kamerze (proporcjonalnie do odległości), by szkic leżący tuż pod ścianą też był widać
+                center = view.opts['center']
+                direction = view.cameraPosition() - center
+                if direction.length() > 1e-9:
+                    direction.normalize()
+                    shift = direction * float(view.opts['distance']) * 0.004
+                    inverse, ok = self.transform().inverted()
+                    if ok:
+                        local = inverse.map(shift) - inverse.map(type(shift)(0, 0, 0))
+                        GL.glTranslatef(local.x(), local.y(), local.z())
             super().paint()
         finally:
+            GL.glPopMatrix()
             GL.glDepthRange(0.0, 1.0)
             GL.glDepthFunc(GL.GL_LESS)
 
