@@ -404,8 +404,9 @@ def pattern_ops(kind, p):
         axis = tuple(float(c) for c in _unit(p["axis"]))
         step = total / n if abs(abs(total) - 360.0) < 1e-9 else (total / (n - 1) if n > 1 else 0.0)
         pivot = tuple(float(c) for c in p["pivot"])
+        offset = tuple(float(c) for c in p.get("offset", (0.0, 0.0, 0.0)))
         for i in range(1, n):
-            ops.append(("r", axis, pivot, i * step))
+            ops.append(("r", axis, pivot, i * step, offset))
     elif kind == "path":
         pts = np.asarray(p["points"], dtype=float)
         if len(pts) < 2:
@@ -444,6 +445,8 @@ def op_matrix(op):
     r = np.eye(3) + np.sin(ang) * k + (1 - np.cos(ang)) * (k @ k)
     m[:3, :3] = r
     m[:3, 3] = pivot - r @ pivot
+    if len(op) > 4:      # najpierw przesunięcie promieniowe (odległość od środka), potem obrót
+        m[:3, 3] = m[:3, 3] + r @ np.asarray(op[4], dtype=float)
     return m
 
 
@@ -452,16 +455,23 @@ def apply_op(shape, op):
         return shape.translate(tuple(float(c) for c in op[1]))
     pivot = tuple(float(c) for c in op[2])
     end = tuple(pivot[i] + float(op[1][i]) for i in range(3))
+    if len(op) > 4 and any(abs(float(c)) > 1e-12 for c in op[4]):
+        shape = shape.translate(tuple(float(c) for c in op[4]))
     return shape.rotate(pivot, end, float(op[3]))
 
 
-def pattern_mesh(mesh, ops):
-    """Siatka podglądu szyku: kopie siatki bazowej przekształcone macierzami (czysty numpy, więc płynnie w czasie rzeczywistym)."""
-    vertices, triangles, edges = [mesh.vertices.astype(np.float32)], [mesh.triangles], {}
-    key, offset = 0, len(mesh.vertices)
-    for points in mesh.edges.values():
-        edges[key] = points
-        key += 1
+def pattern_mesh(mesh, ops, original=True):
+    """Siatka podglądu szyku: kopie siatki bazowej przekształcone macierzami (czysty numpy, więc płynnie w czasie rzeczywistym).
+    original=False pomija nieprzesunięty oryginał (gdy pierwszą operacją jest jego przesunięcie na zadaną odległość)."""
+    vertices, triangles, edges = [], [], {}
+    key, offset = 0, 0
+    if original:
+        vertices.append(mesh.vertices.astype(np.float32))
+        triangles.append(mesh.triangles)
+        offset = len(mesh.vertices)
+        for points in mesh.edges.values():
+            edges[key] = points
+            key += 1
     for op in ops:
         m = op_matrix(op)
         vertices.append((mesh.vertices @ m[:3, :3].T + m[:3, 3]).astype(np.float32))

@@ -577,6 +577,7 @@ class StudioWindow(QMainWindow):
 
         # --- szyk (prostokątny / kołowy / wzdłuż linii) ---
         self.pat_id, self.pat_path = None, None
+        self.pat_picking = False
         self.pat_panel, lay = self._panel(312, 'Szyk', 'x_pattern', 'Prostokątny · kołowy · wzdłuż linii', plain=True)
         self.pat_step1 = ui.StepRow(1, 'x_object', 'Obiekt do szyku', plain=True)
         self.pat_step2 = ui.StepRow(2, 'x_pat_path', 'Ścieżka (linia lub krawędź)', plain=True)
@@ -622,8 +623,22 @@ class StudioWindow(QMainWindow):
         crow.addLayout(d1)
         crow.addLayout(d2)
         cl.addLayout(crow)
-        self.pat_origin = QCheckBox('Oś przez początek układu (inaczej przez środek obiektu)')
-        cl.addWidget(self.pat_origin)
+        cl.addWidget(_label('Środek obrotu (mm)'))
+        prow = QHBoxLayout()
+        prow.setSpacing(6)
+        self.pat_pivot = [_spin(0, -1e6, 1e6, 2, 1) for _ in range(3)]
+        for axis, spin in zip('XYZ', self.pat_pivot):
+            col = QVBoxLayout()
+            col.addWidget(_label(axis))
+            col.addWidget(spin)
+            prow.addLayout(col)
+        cl.addLayout(prow)
+        self.pat_pick = QPushButton('Wskaż punkt środka na modelu')
+        self.pat_pick.setCheckable(True)
+        self.pat_pick.toggled.connect(lambda on: self._pattern_pick_toggled(on))
+        cl.addWidget(self.pat_pick)
+        self.pat_radius = _spin(0, 0, 1e6, 2, 1)
+        self._field(cl, 'Odległość obiektu od środka (mm)', self.pat_radius)
         lay.addWidget(self.pat_circ)
         self.pat_line = QWidget()
         ll = QVBoxLayout(self.pat_line)
@@ -654,11 +669,12 @@ class StudioWindow(QMainWindow):
         reset.clicked.connect(lambda _=False: self.reset_pattern())
         lay.addWidget(reset)
         self.pat_kind.currentIndexChanged.connect(lambda *_: self._pattern_kind_changed())
-        for w in (*self.pat_counts, *self.pat_gaps, self.pat_ccount, self.pat_angle, self.pat_lcount, self.pat_lgap):
+        for w in (*self.pat_counts, *self.pat_gaps, self.pat_ccount, self.pat_angle, self.pat_lcount, self.pat_lgap, self.pat_radius):
             w.valueChanged.connect(lambda *_: self._timers['pattern'].start())
-        for w in (self.pat_axis,):
-            w.currentIndexChanged.connect(lambda *_: self._timers['pattern'].start())
-        for w in (self.pat_origin, self.pat_fit, self.pat_join):
+        for w in self.pat_pivot:
+            w.valueChanged.connect(lambda *_: self._pattern_pivot_changed())
+        self.pat_axis.currentIndexChanged.connect(lambda *_: self._pattern_pivot_changed())
+        for w in (self.pat_fit, self.pat_join):
             w.toggled.connect(lambda *_: self._timers['pattern'].start())
 
         # --- tekst: powierzchnia -> obszar -> treść (jak kreator odbicia lustrzanego) ---
@@ -1851,6 +1867,10 @@ class StudioWindow(QMainWindow):
                 self.view.setCursor(Qt.SizeAllCursor if hit else Qt.ArrowCursor)
             elif self.mode == 'mirror' and self.mirror_id and self.mirror_frame is None:
                 self._hover_face_only(x, y)
+            elif self.mode == 'pattern' and self.pat_id and self.pat_picking:
+                vertex = self.view.nearest_vertex(x, y)
+                self.view.hover_vertex = vertex[1] if vertex else None
+                self.view.overlay.update()
             elif self.mode == 'pattern' and self.pat_id and self.pat_kind.currentData() == 'path':
                 self.view._set_hover_edge(self.view.nearest_edge(x, y))
             elif self.mode == 'mod':
@@ -2607,7 +2627,11 @@ class StudioWindow(QMainWindow):
                 spin.setValue(round(float(size) * 1.25 + 1.0, 1))
                 spin.blockSignals(False)
             self.pat_join.setChecked(False)
+            self._pattern_defaults(body)
             self.update_pattern_status()
+            return
+        if self.pat_picking:
+            self._pattern_pick_point(x, y)
             return
         if self.pat_kind.currentData() == 'path':
             hit = self.view.nearest_edge(x, y)
@@ -2639,29 +2663,103 @@ class StudioWindow(QMainWindow):
         self.refresh()
         self._timers['pattern'].start()
 
-    def _pattern_ops(self, body):
-        kind = self.pat_kind.currentData()
+    AXES = {'X': (1.0, 0.0, 0.0), 'Y': (0.0, 1.0, 0.0), 'Z': (0.0, 0.0, 1.0)}
+
+    def _pattern_center(self, body):
         low, high = self._mesh_bounds(body.mesh)
+        return (low + high) / 2, high - low
+
+    def _radial(self, body):
+        """(odległość obiektu od osi, wersor promieniowy) dla bieżącego środka i osi obrotu."""
+        axis = np.array(self.AXES[self.pat_axis.currentData()])
+        pivot = np.array([s.value() for s in self.pat_pivot], float)
+        v = self._pattern_center(body)[0] - pivot
+        r = v - float(v @ axis) * axis
+        d = float(np.linalg.norm(r))
+        if d > 1e-6:
+            return d, r / d
+        other = np.cross(axis, [0.0, 0.0, 1.0] if abs(axis[2]) < .9 else [1.0, 0.0, 0.0])
+        return 0.0, other / np.linalg.norm(other)
+
+    def _pattern_set(self, spins, values):
+        for spin, value in zip(spins, values):
+            spin.blockSignals(True)
+            spin.setValue(round(float(value), 2))
+            spin.blockSignals(False)
+
+    def _pattern_defaults(self, body):
+        """Domyślny środek: początek układu; gdy obiekt leży na osi, środek przesuwamy tak, by obiekt miał miejsce do obrotu."""
+        center, size = self._pattern_center(body)
+        self._pattern_set(self.pat_pivot, (0.0, 0.0, 0.0))
+        d, direction = self._radial(body)
+        if d < 1e-6:
+            d = max(float(np.max(size)) * 1.5, 5.0)
+            self._pattern_set(self.pat_pivot, center - direction * d)
+        self._pattern_set([self.pat_radius], [d])
+
+    def _pattern_pivot_changed(self):
+        body = self.document.get(self.pat_id) if self.pat_id else None
+        if body is not None and body.mesh is not None:
+            self._pattern_set([self.pat_radius], [self._radial(body)[0]])
+        self._timers['pattern'].start()
+
+    def _pattern_pick_toggled(self, on):
+        self.pat_picking = bool(on) and self.pat_id is not None
+        if on and self.pat_id is None:
+            self.pat_pick.setChecked(False)
+            self.toast('Najpierw wybierz obiekt.')
+            return
+        if on:
+            self.toast('Kliknij wierzchołek, ścianę lub płaszczyznę, która ma być środkiem obrotu.', 4000)
+        self.view.setCursor(Qt.CrossCursor if on else Qt.ArrowCursor)
+
+    def _pattern_pick_point(self, x, y):
+        vertex = self.view.nearest_vertex(x, y)
+        point = None
+        if vertex is not None:
+            point = vertex[1]
+        else:
+            hit = self.view.pick_face(x, y)
+            if hit is not None:
+                point = hit[2]
+            else:
+                name = self.view.plane_at(x, y)
+                found = self.view._plane_hit(name, x, y) if name else None
+                point = found[1] if found else None
+        if point is None:
+            self.toast('Kliknij punkt na modelu lub na płaszczyźnie.')
+            return
+        self._pattern_set(self.pat_pivot, point)
+        self.pat_pick.setChecked(False)
+        self._pattern_pivot_changed()
+
+    def _pattern_ops(self, body):
+        """(kopie, operacja przesunięcia oryginału na zadaną odległość albo None)."""
+        kind = self.pat_kind.currentData()
         if kind == 'rect':
-            return kernel.pattern_ops('rect', dict(counts=[int(round(c.value())) for c in self.pat_counts], spacing=[g.value() for g in self.pat_gaps]))
+            return kernel.pattern_ops('rect', dict(counts=[int(round(c.value())) for c in self.pat_counts], spacing=[g.value() for g in self.pat_gaps])), None
         if kind == 'circ':
-            axis = {'X': (1, 0, 0), 'Y': (0, 1, 0), 'Z': (0, 0, 1)}[self.pat_axis.currentData()]
-            pivot = (0.0, 0.0, 0.0) if self.pat_origin.isChecked() else tuple(float(c) for c in (low + high) / 2)
-            return kernel.pattern_ops('circ', dict(axis=axis, pivot=pivot, count=int(round(self.pat_ccount.value())), angle=self.pat_angle.value()))
+            d0, direction = self._radial(body)
+            offset = tuple(float(c) for c in direction * (self.pat_radius.value() - d0))
+            pivot = tuple(s.value() for s in self.pat_pivot)
+            ops = kernel.pattern_ops('circ', dict(axis=self.AXES[self.pat_axis.currentData()], pivot=pivot, count=int(round(self.pat_ccount.value())),
+                                                  angle=self.pat_angle.value(), offset=offset))
+            return ops, (('t', offset) if max(abs(c) for c in offset) > 1e-9 else None)
         return kernel.pattern_ops('path', dict(points=self.pat_path if self.pat_path is not None else [], count=int(round(self.pat_lcount.value())),
-                                               fit=self.pat_fit.isChecked(), spacing=self.pat_lgap.value()))
+                                               fit=self.pat_fit.isChecked(), spacing=self.pat_lgap.value())), None
 
     def update_pattern_preview(self):
         """Podgląd na żywo: kopie siatki obiektu przekształcone macierzami (bez OCC), więc zmiana parametru jest natychmiastowa."""
         if self.mode != 'pattern':
             return
         body = self.document.get(self.pat_id) if self.pat_id else None
+        self.view.sel_vertices = [np.array([s.value() for s in self.pat_pivot], float)] if body is not None and self.pat_kind.currentData() == 'circ' else []
         if body is None or body.mesh is None or (self.pat_kind.currentData() == 'path' and self.pat_path is None):
             self.view.set_preview_mesh(None)
             return
         try:
-            ops = self._pattern_ops(body)
-            mesh = kernel.pattern_mesh(body.mesh, ops)
+            ops, moved = self._pattern_ops(body)
+            mesh = kernel.pattern_mesh(body.mesh, ([moved] if moved else []) + ops, original=moved is None)
         except kernel.CadError as exc:
             self.view.set_preview_mesh(None)
             self.pat_status.setText(str(exc))
@@ -2677,22 +2775,24 @@ class StudioWindow(QMainWindow):
             self.toast('Kliknij bryłę lub szkic, który ma być powielony.')
             return
         try:
-            ops = self._pattern_ops(body)
+            ops, moved = self._pattern_ops(body)
         except kernel.CadError as exc:
             self.toast(str(exc))
             return
-        if not ops:
+        if not ops and moved is None:
             self.toast('Zwiększ ilość kopii.')
             return
         join = self.pat_join.isChecked() and body.kind == 'solid'
 
         def build():
+            source = kernel.apply_op(body.shape, moved) if moved else body.shape
             copies = [kernel.apply_op(body.shape, op) for op in ops]
             if join:
-                merged = kernel.boolean('union', body.shape, copies)
+                merged = kernel.boolean('union', source, copies) if copies else source
                 return [body.changed(merged) if b.id == body.id else b for b in self.document.bodies]
             made = [Body(f'{body.name} — szyk {i + 1}', sh, body.kind, body.plane).prepared() for i, sh in enumerate(copies)]
-            return [*self.document.bodies, *made]
+            current = [body.changed(source) if (moved and b.id == body.id) else b for b in self.document.bodies]
+            return [*current, *made]
 
         def apply(new):
             self.document.commit(new)
