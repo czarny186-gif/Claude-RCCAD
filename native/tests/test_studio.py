@@ -346,6 +346,14 @@ class StudioTests(unittest.TestCase):
         arc=w.document.bodies[-1];self.assertEqual(arc.meta['tool'],'arc');w.choose_tool(None);w.selected=[arc.id];self.assertTrue(w.open_dim_edit())
         self.assertEqual([e.text() for e in w.dim_edits if e.isVisible()],['10.0','3.0']);w.dim_panel.hide()
 
+    def test_cube_face_preselects_sketch_plane_and_grid_button(self):
+        w=self.w;w.set_mode(None);w._cube_clicked('X');self.assertIsNone(w.mode)
+        w.toggle_mode('sketch');self.assertEqual((w.mode,w.sketch_plane),('sketch','YZ'))
+        w.set_mode(None);w.view.set_view('iso');w.toggle_mode('sketch');self.assertEqual(w.mode,'plane')
+        w.set_mode(None);self.assertTrue(w.grid_button.isChecked())
+        w.grid_button.setChecked(False);self.assertFalse(any(g.visible() for g in w.view.grid_items))
+        w.grid_button.setChecked(True);self.assertTrue(all(g.visible() for g in w.view.grid_items))
+
     def test_cube_button_picks_sketch_plane_and_grid_adapts(self):
         w=self.w;w.set_mode('plane');w._cube_clicked('X');self.assertEqual((w.mode,w.sketch_plane),('sketch','YZ'))
         w.view.opts['distance']=400;w.view.update();far=w.view._grid_key[0]

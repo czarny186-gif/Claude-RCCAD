@@ -16,7 +16,7 @@ icons_orange = '#f09a22'
 from .document import Body, Document
 from .viewcube import ViewCube
 from . import sketchmeta as sm
-from .viewport import CadView
+from .viewport import CadView, VIEWS as VIEWS_FOR_CUBE
 
 NEED = {'rect': 2, 'centerRect': 2, 'rect3': 3, 'circle': 2, 'circle2': 2, 'circle3': 3, 'ellipse': 2, 'slot': 3, 'polygon': 2,
         'arc': 3, 'point': 1, 'construction': 2, 'measure': 2, 'text': 1, 'trim': 1, 'line': 2, 'circleTangent2': 3}
@@ -298,19 +298,27 @@ class StudioWindow(QMainWindow):
         pl.setContentsMargins(7, 7, 7, 7)
         pl.setSpacing(7)
         self.pad_buttons = {}
-        for name, text, tip in (('move', 'Przesuń', 'Przesuń zaznaczony element w osiach X, Y, Z'), ('rotate', 'Obróć', 'Obróć zaznaczony element')):
+        for name, tip in (('move', 'Przesuń zaznaczony element w osiach X, Y, Z'), ('rotate', 'Obróć zaznaczony element')):
             button = QToolButton()
             button.setObjectName('padTool')
-            button.setIcon(ui.style_icon(name, 26))
-            button.setIconSize(QSize(26, 26))
-            button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-            button.setText(' ' + text)
+            button.setIcon(ui.style_icon(name, 28))
+            button.setIconSize(QSize(28, 28))
             button.setCheckable(True)
-            button.setFixedSize(112, 44)
+            button.setFixedSize(46, 44)
             button.setToolTip(tip)
             button.clicked.connect(lambda _=False, n=name: self.toggle_mode(n))
             pl.addWidget(button)
             self.pad_buttons[name] = button
+        self.grid_button = QToolButton()
+        self.grid_button.setObjectName('padTool')
+        self.grid_button.setIcon(ui.style_icon('grid', 28))
+        self.grid_button.setIconSize(QSize(28, 28))
+        self.grid_button.setCheckable(True)
+        self.grid_button.setChecked(True)
+        self.grid_button.setFixedSize(46, 44)
+        self.grid_button.setToolTip('Pokaż / ukryj siatkę')
+        self.grid_button.toggled.connect(lambda on: self.view.set_grid_visible(on))
+        pl.addWidget(self.grid_button)
         ui.shadow(self.pad, 19, 5, 43)
         self.pad.adjustSize()
 
@@ -730,14 +738,34 @@ class StudioWindow(QMainWindow):
     CUBE_PLANES = {'Z': 'XY', '-Z': 'XY', 'X': 'YZ', '-X': 'YZ', 'Y': 'XZ', '-Y': 'XZ'}
 
     def _cube_clicked(self, name):
-        if self.mode in ('plane', 'sketch') and name in self.CUBE_PLANES and not self.busy:
-            # w trybie szkicu ściana kostki wybiera płaszczyznę szkicu (kamera patrzy na nią z wybranej strony)
-            self.enter_sketch(self.CUBE_PLANES[name])
+        plane = self.CUBE_PLANES.get(name)
+        if plane is not None and not self.busy and self.mode == 'sketch' and self.tool == 'text' and self.txt and self.txt['stage'] == 'surface':
+            self._text_plane_keep = True       # tekst: ściana kostki = kliknięcie płaszczyzny na polu roboczym
+            self.enter_sketch(plane)
             self.view.set_view(name)
+            self._cube_pick = (name, plane)
+            return
+        if plane is not None and not self.busy and self.mode in ('plane', 'sketch'):
+            # ściana kostki wybiera płaszczyznę szkicu dokładnie tak jak kliknięcie płaszczyzny na polu roboczym
+            self.enter_sketch(plane)
+            self.view.set_view(name)
+            self._cube_pick = (name, plane)
             self._mark_view(name)
             return
         self.view.set_view(name)
+        self._cube_pick = (name, plane) if plane is not None else None
         self._mark_view(name)
+
+    def _cube_plane_if_current(self):
+        """Płaszczyzna wybrana ścianą kostki, dopóki kamera nadal na nią patrzy - wtedy szkic startuje od razu, bez ponownego wyboru."""
+        pick = getattr(self, '_cube_pick', None)
+        if not pick:
+            return None
+        el, az = VIEWS_FOR_CUBE[pick[0]]
+        d_az = (float(self.view.opts['azimuth']) - az + 180.0) % 360.0 - 180.0
+        if abs(float(self.view.opts['elevation']) - el) < 1.0 and abs(d_az) < 1.0:
+            return pick[1]
+        return None
 
     def _planes_toggled(self, on):
         self._planes_visible = on
@@ -761,7 +789,13 @@ class StudioWindow(QMainWindow):
             return
         target = 'plane' if key == 'sketch' else key
         current = 'plane' if self.mode == 'sketch' else self.mode
-        self.set_mode(None if current == target else target)
+        if current == target:
+            self.set_mode(None)
+            return
+        self.set_mode(target)
+        chosen = self._cube_plane_if_current() if target == 'plane' else None
+        if chosen is not None:
+            self.enter_sketch(chosen)      # powierzchnia już wybrana na kostce: bez ponownego wskazywania
 
     def set_mode(self, mode):
         """Przełącza narzędzie; None = zwykłe zaznaczanie."""

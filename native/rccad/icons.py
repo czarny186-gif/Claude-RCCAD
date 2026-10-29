@@ -250,6 +250,11 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             path = QPainterPath(); path.moveTo(7, 24); path.lineTo(24, 8); path.lineTo(41, 24); path.lineTo(36, 24); path.lineTo(36, 40); path.lineTo(12, 40); path.lineTo(12, 24); path.closeSubpath()
             fl(path, soft)
             fl(_rounded(20, 28, 8, 12, 1.5), QColor(acc), acc, 1.2)
+        elif name == 'grid':
+            st(ink, 2.4)
+            for k in (9, 19, 29, 39):
+                p.drawLine(QPointF(k, 8), QPointF(k, 40)); p.drawLine(QPointF(8, k), QPointF(40, k))
+            st(acc, 3.0); p.drawLine(QPointF(24, 6), QPointF(24, 42)); p.drawLine(QPointF(6, 24), QPointF(42, 24))
         elif name == 'layers':
             for k, y in enumerate((30, 20, 10)):
                 q = poly([(24, y + 8), (42, y), (24, y - 8 + 0), (6, y)])

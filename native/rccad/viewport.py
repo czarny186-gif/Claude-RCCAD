@@ -566,6 +566,13 @@ class CadView(gl.GLViewWidget):
         self.opts['center'] = QVector3D(*map(float, center))
         self.setCameraPosition(distance=max(20, float(np.linalg.norm(high - low)) * 1.6))
 
+    def set_grid_visible(self, on):
+        """Siatka robocza włączana / wyłączana przyciskiem na dolnym pasku."""
+        self._grid_on = bool(on)
+        for grid in getattr(self, 'grid_items', ()):
+            grid.setVisible(self._grid_on)
+        self.update()
+
     def set_view(self, name):
         el, az = VIEWS[name]
         self.setCameraPosition(elevation=el, azimuth=az)
