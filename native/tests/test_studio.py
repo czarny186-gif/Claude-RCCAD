@@ -165,6 +165,19 @@ class StudioTests(unittest.TestCase):
         self.assertEqual(len(w.edges[a.id]),4);self.assertTrue(w.view.selection_items)
         w.mod_size.setValue(2);w.apply_mod();self.wait();self.assertLess(w.document.bodies[0].shape.Volume(),8000)
 
+    def test_pattern_rect_circular_and_path_live_preview_and_apply(self):
+        w=self.w;a=Body('A',k.box(10,10,10)).prepared();w.document.commit([a]);w.refresh()
+        self.assertEqual(len(k.pattern_ops('rect',dict(counts=[3,2,1],spacing=[20,20,0]))),5)
+        m=k.op_matrix(('r',(0,0,1),(0,0,0),90));self.assertAlmostEqual(float((m[:3,:3]@np.array([1,0,0]))[1]),1.0,6)
+        w.set_mode('pattern');self.assertTrue(w.pat_panel.isVisible())
+        with patch.object(w,'pick_object',return_value=a.id):w.view_clicked(5,5,False,False)
+        w.pat_counts[0].setValue(4);w.update_pattern_preview();self.assertTrue(w.view.preview_items);self.assertIn('Kopie: 3',w.pat_status.text())
+        w.pat_kind.setCurrentIndex(1);w.pat_ccount.setValue(5);w.update_pattern_preview();self.assertIn('Kopie: 4',w.pat_status.text())
+        w.pat_kind.setCurrentIndex(2);w.update_pattern_preview();self.assertFalse(w.view.preview_items)
+        w.pat_path=np.array([[0,0,0],[100,0,0]],float);w.pat_lcount.setValue(6);w.update_pattern_preview();self.assertIn('Kopie: 5',w.pat_status.text())
+        w.pat_kind.setCurrentIndex(0);w.pat_counts[0].setValue(3);w.apply_pattern();self.wait()
+        self.assertEqual(len([b for b in w.document.bodies if b.kind=='solid']),3)
+
     def test_chamfer(self):
         w=self.w;a=Body('A',k.box(20,20,20)).prepared();w.document.commit([a]);w.refresh();w.set_mode('mod');w.mod_kind.setCurrentIndex(1)
         w.edges={a.id:{0}};w.mod_size.setValue(2);w.apply_mod();self.wait();self.assertLess(w.document.bodies[0].shape.Volume(),8000)

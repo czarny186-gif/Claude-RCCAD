@@ -371,6 +371,108 @@ def transform(shape, translation=(0, 0, 0), rotation=(0, 0, 0)):
     return valid(result.translate(tuple(float(v) for v in translation)), bool(shape.Solids()))
 
 
+PATTERN_MAX = 400
+
+
+def _unit(v):
+    v = np.asarray(v, dtype=float)
+    n = float(np.linalg.norm(v))
+    if n < 1e-12:
+        raise CadError("Nieprawidłowy kierunek.")
+    return v / n
+
+
+def pattern_ops(kind, p):
+    """Kopie szyku (bez oryginału) jako lista operacji: ('t', (x, y, z)) - przesunięcie, ('r', oś, punkt, kąt°) - obrót.
+    kind: 'rect' (counts, spacing), 'circ' (axis, pivot, count, angle) albo 'path' (points, count, fit, spacing)."""
+    ops = []
+    if kind == "rect":
+        nx, ny, nz = (max(1, int(c)) for c in p["counts"])
+        dx, dy, dz = (float(c) for c in p["spacing"])
+        if nx * ny * nz > PATTERN_MAX:
+            raise CadError(f"Zbyt wiele kopii (maksymalnie {PATTERN_MAX}).")
+        for i in range(nx):
+            for j in range(ny):
+                for k in range(nz):
+                    if (i, j, k) != (0, 0, 0):
+                        ops.append(("t", (i * dx, j * dy, k * dz)))
+    elif kind == "circ":
+        n = max(1, int(p["count"]))
+        if n > PATTERN_MAX:
+            raise CadError(f"Zbyt wiele kopii (maksymalnie {PATTERN_MAX}).")
+        total = float(p["angle"])
+        axis = tuple(float(c) for c in _unit(p["axis"]))
+        step = total / n if abs(abs(total) - 360.0) < 1e-9 else (total / (n - 1) if n > 1 else 0.0)
+        pivot = tuple(float(c) for c in p["pivot"])
+        for i in range(1, n):
+            ops.append(("r", axis, pivot, i * step))
+    elif kind == "path":
+        pts = np.asarray(p["points"], dtype=float)
+        if len(pts) < 2:
+            raise CadError("Wskaż linię lub krawędź jako ścieżkę.")
+        seg = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+        cum = np.concatenate([[0.0], np.cumsum(seg)])
+        length = float(cum[-1])
+        if length < 1e-9:
+            raise CadError("Ścieżka ma zerową długość.")
+        n = max(1, int(p["count"]))
+        if n > PATTERN_MAX:
+            raise CadError(f"Zbyt wiele kopii (maksymalnie {PATTERN_MAX}).")
+        if p.get("fit", True):
+            dist = np.linspace(0.0, length, n) if n > 1 else np.zeros(1)
+        else:
+            step = max(float(p.get("spacing", 10.0)), 1e-6)
+            dist = np.arange(n) * step
+            dist = dist[dist <= length + 1e-9]
+        at = lambda d: np.array([np.interp(d, cum, pts[:, k]) for k in range(3)])
+        base = at(0.0)
+        for d in dist[1:]:
+            ops.append(("t", tuple(float(c) for c in at(float(d)) - base)))
+    else:
+        raise CadError("Nieznany rodzaj szyku.")
+    return ops
+
+
+def op_matrix(op):
+    """Macierz 4x4 operacji szyku (do natychmiastowego podglądu bez OCC)."""
+    m = np.eye(4)
+    if op[0] == "t":
+        m[:3, 3] = op[1]
+        return m
+    axis, pivot, ang = _unit(op[1]), np.asarray(op[2], dtype=float), np.radians(op[3])
+    k = np.array([[0, -axis[2], axis[1]], [axis[2], 0, -axis[0]], [-axis[1], axis[0], 0]])
+    r = np.eye(3) + np.sin(ang) * k + (1 - np.cos(ang)) * (k @ k)
+    m[:3, :3] = r
+    m[:3, 3] = pivot - r @ pivot
+    return m
+
+
+def apply_op(shape, op):
+    if op[0] == "t":
+        return shape.translate(tuple(float(c) for c in op[1]))
+    pivot = tuple(float(c) for c in op[2])
+    end = tuple(pivot[i] + float(op[1][i]) for i in range(3))
+    return shape.rotate(pivot, end, float(op[3]))
+
+
+def pattern_mesh(mesh, ops):
+    """Siatka podglądu szyku: kopie siatki bazowej przekształcone macierzami (czysty numpy, więc płynnie w czasie rzeczywistym)."""
+    vertices, triangles, edges = [mesh.vertices.astype(np.float32)], [mesh.triangles], {}
+    key, offset = 0, len(mesh.vertices)
+    for points in mesh.edges.values():
+        edges[key] = points
+        key += 1
+    for op in ops:
+        m = op_matrix(op)
+        vertices.append((mesh.vertices @ m[:3, :3].T + m[:3, 3]).astype(np.float32))
+        triangles.append(mesh.triangles + offset)
+        offset += len(mesh.vertices)
+        for points in mesh.edges.values():
+            edges[key] = (points @ m[:3, :3].T + m[:3, 3]).astype(np.float32)
+            key += 1
+    return DisplayMesh(np.vstack(vertices), np.vstack(triangles) if len(mesh.triangles) else mesh.triangles, edges, mesh.center, mesh.size)
+
+
 def mirror(shape, plane):
     return valid(shape.mirror(plane), bool(shape.Solids()))
 

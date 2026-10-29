@@ -174,7 +174,7 @@ class StudioWindow(QMainWindow):
         QApplication.instance().installEventFilter(self)
         self._timers = {}
         for name, slot in (('extrude', self.update_extrude_preview), ('mod', self.update_mod_preview), ('bool', self.update_bool_preview),
-                           ('mirror', self.update_mirror_preview), ('transform', self.update_transform_preview), ('dim', self.update_dim_preview),
+                           ('mirror', self.update_mirror_preview), ('pattern', self.update_pattern_preview), ('transform', self.update_transform_preview), ('dim', self.update_dim_preview),
                            ('gizmo', self._place_gizmo)):
             timer = QTimer(self)
             timer.setSingleShot(True)
@@ -231,7 +231,8 @@ class StudioWindow(QMainWindow):
                  ('extrude', ui.style_icon('extrude', 38), 'Wyciągnij'),
                  ('bool', ui.style_icon('bool', 38), 'Boolean / CSG'),
                  ('mod', ui.style_icon('mod', 38), 'Edytuj bryłę — zaokrąglenie i fazowanie'),
-                 ('mirror', ui.style_icon('mirror', 38), 'Odbicie lustrzane')]
+                 ('mirror', ui.style_icon('mirror', 38), 'Odbicie lustrzane'),
+                 ('pattern', ui.style_icon('pattern', 38), 'Szyk — prostokątny, kołowy, wzdłuż linii')]
         self.tools = {}
         for key, icon, tip in icons:
             button = ui.big_tool(icon, tip, checkable=key != 'file')
@@ -574,6 +575,92 @@ class StudioWindow(QMainWindow):
         self.mir_keep.toggled.connect(lambda *_: self._timers['mirror'].start())
         self.mir_join.toggled.connect(lambda *_: self._timers['mirror'].start())
 
+        # --- szyk (prostokątny / kołowy / wzdłuż linii) ---
+        self.pat_id, self.pat_path = None, None
+        self.pat_panel, lay = self._panel(312, 'Szyk', 'x_pattern', 'Prostokątny · kołowy · wzdłuż linii', plain=True)
+        self.pat_step1 = ui.StepRow(1, 'x_object', 'Obiekt do szyku', plain=True)
+        self.pat_step2 = ui.StepRow(2, 'x_pat_path', 'Ścieżka (linia lub krawędź)', plain=True)
+        lay.addWidget(self.pat_step1)
+        lay.addWidget(self.pat_step2)
+        self.pat_kind = ui.Segmented([('Prostokątny', 'rect', 'x_pat_rect'), ('Kołowy', 'circ', 'x_pat_circ'), ('Wzdłuż linii', 'path', 'x_pat_path')], 34)
+        lay.addWidget(self.pat_kind)
+        self.pat_rect = QWidget()
+        grid = QVBoxLayout(self.pat_rect)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(6)
+        self.pat_counts = [_spin(3 if i == 0 else 1, 1, 200, 0, 1) for i in range(3)]
+        self.pat_gaps = [_spin(20, -1e5, 1e5, 2, 1) for _ in range(3)]
+        for i, axis in enumerate('XYZ'):
+            row = QHBoxLayout()
+            row.setSpacing(8)
+            c1, c2 = QVBoxLayout(), QVBoxLayout()
+            c1.addWidget(_label(f'Ilość {axis}'))
+            c1.addWidget(self.pat_counts[i])
+            c2.addWidget(_label(f'Odstęp {axis} (mm)'))
+            c2.addWidget(self.pat_gaps[i])
+            row.addLayout(c1)
+            row.addLayout(c2)
+            grid.addLayout(row)
+        lay.addWidget(self.pat_rect)
+        self.pat_circ = QWidget()
+        cl = QVBoxLayout(self.pat_circ)
+        cl.setContentsMargins(0, 0, 0, 0)
+        cl.setSpacing(6)
+        self.pat_axis = QComboBox()
+        for label, key in (('Oś Z (pionowa)', 'Z'), ('Oś X', 'X'), ('Oś Y', 'Y')):
+            self.pat_axis.addItem(label, key)
+        self._field(cl, 'Oś obrotu', self.pat_axis)
+        crow = QHBoxLayout()
+        crow.setSpacing(8)
+        d1, d2 = QVBoxLayout(), QVBoxLayout()
+        self.pat_ccount = _spin(6, 1, 400, 0, 1)
+        self.pat_angle = _spin(360, -360, 360, 1, 15)
+        d1.addWidget(_label('Ilość'))
+        d1.addWidget(self.pat_ccount)
+        d2.addWidget(_label('Kąt całkowity (°)'))
+        d2.addWidget(self.pat_angle)
+        crow.addLayout(d1)
+        crow.addLayout(d2)
+        cl.addLayout(crow)
+        self.pat_origin = QCheckBox('Oś przez początek układu (inaczej przez środek obiektu)')
+        cl.addWidget(self.pat_origin)
+        lay.addWidget(self.pat_circ)
+        self.pat_line = QWidget()
+        ll = QVBoxLayout(self.pat_line)
+        ll.setContentsMargins(0, 0, 0, 0)
+        ll.setSpacing(6)
+        lrow = QHBoxLayout()
+        lrow.setSpacing(8)
+        e1, e2 = QVBoxLayout(), QVBoxLayout()
+        self.pat_lcount = _spin(5, 1, 400, 0, 1)
+        self.pat_lgap = _spin(20, .01, 1e5, 2, 1)
+        e1.addWidget(_label('Ilość'))
+        e1.addWidget(self.pat_lcount)
+        e2.addWidget(_label('Odstęp (mm)'))
+        e2.addWidget(self.pat_lgap)
+        lrow.addLayout(e1)
+        lrow.addLayout(e2)
+        ll.addLayout(lrow)
+        self.pat_fit = QCheckBox('Rozmieść równo na całej długości')
+        self.pat_fit.setChecked(True)
+        ll.addWidget(self.pat_fit)
+        lay.addWidget(self.pat_line)
+        self.pat_join = QCheckBox('Połącz kopie w jedną bryłę')
+        lay.addWidget(self.pat_join)
+        self.pat_status = _label('', 'status')
+        lay.addWidget(self.pat_status)
+        self._buttons(lay, 'Zastosuj (Enter)', 'Zamknij', self.apply_pattern, lambda: self.set_mode(None))
+        reset = QPushButton('Zmień obiekt')
+        reset.clicked.connect(lambda _=False: self.reset_pattern())
+        lay.addWidget(reset)
+        self.pat_kind.currentIndexChanged.connect(lambda *_: self._pattern_kind_changed())
+        for w in (*self.pat_counts, *self.pat_gaps, self.pat_ccount, self.pat_angle, self.pat_lcount, self.pat_lgap):
+            w.valueChanged.connect(lambda *_: self._timers['pattern'].start())
+        for w in (self.pat_axis,):
+            w.currentIndexChanged.connect(lambda *_: self._timers['pattern'].start())
+        for w in (self.pat_origin, self.pat_fit, self.pat_join):
+            w.toggled.connect(lambda *_: self._timers['pattern'].start())
+
         # --- tekst: powierzchnia -> obszar -> treść (jak kreator odbicia lustrzanego) ---
         self.txt = None
         self._text_ext = {}
@@ -637,13 +724,13 @@ class StudioWindow(QMainWindow):
         self.text_size.valueChanged.connect(lambda *_: self._text_spin_changed())
         self.text_angle.valueChanged.connect(lambda *_: self._text_spin_changed())
 
-        self.panels = (self.ex_panel, self.ex_bar, self.bool_panel, self.mod_panel, self.mir_panel, self.text_panel)
+        self.panels = (self.ex_panel, self.ex_bar, self.bool_panel, self.mod_panel, self.mir_panel, self.pat_panel, self.text_panel)
         for p in self.panels:
             p.adjustSize()
 
     def _layout_overlays(self):
         W, H = self.view.width(), self.view.height()
-        for i, key in enumerate(('file', 'sketch', 'extrude', 'bool', 'mod', 'mirror')):
+        for i, key in enumerate(('file', 'sketch', 'extrude', 'bool', 'mod', 'mirror', 'pattern')):
             self.tools[key].move(18 + 60 * i, 18)
         self.shape_bar.move(18, 80)
         self.clear_button.move(W - 446, 20)
@@ -658,12 +745,12 @@ class StudioWindow(QMainWindow):
         self.t_editor.adjustSize()
         self.t_editor.move(max(10, (W - self.t_editor.width()) // 2), H - 166 - self.t_editor.height())
         self.sk_bar.adjustSize()
-        self.sk_bar.move(max(400, (W - self.sk_bar.width()) // 2), 18)
+        self.sk_bar.move(max(450, (W - self.sk_bar.width()) // 2), 18)
         self.origin_label.adjustSize()
         self.origin_label.move(W - 18 - self.origin_label.width(), H - 15 - self.origin_label.height())
         self.notice.adjustSize()
         self.notice.move(W - 18 - self.notice.width(), H - 22 - self.notice.height())
-        for p in (self.bool_panel, self.mod_panel, self.mir_panel):
+        for p in (self.bool_panel, self.mod_panel, self.mir_panel, self.pat_panel):
             p.adjustSize()
             p.move(18, 88)
         self.text_panel.adjustSize()
@@ -698,7 +785,7 @@ class StudioWindow(QMainWindow):
                 if self.open_dim_edit():
                     return True
         if event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Return, Qt.Key_Enter) and self.isActiveWindow() and not self.busy:
-            action = {'extrude': self.apply_extrude, 'bool': self.apply_bool, 'mod': self.apply_mod, 'mirror': self.apply_mirror,
+            action = {'extrude': self.apply_extrude, 'bool': self.apply_bool, 'mod': self.apply_mod, 'mirror': self.apply_mirror, 'pattern': self.apply_pattern,
                       'move': self.apply_transform, 'rotate': self.apply_transform}.get(self.mode)
             if action is None and self.mode == 'sketch' and self.tool == 'text' and self.txt and self.txt['stage'] == 'edit':
                 action = self.apply_text
@@ -838,6 +925,7 @@ class StudioWindow(QMainWindow):
         self.bool_ids = []
         self.mirror_id = None
         self.mirror_frame = None
+        self.pat_id, self.pat_path = None, None
         self.t_target = None
         self.edges = {}
         self._hover_key = None
@@ -879,6 +967,11 @@ class StudioWindow(QMainWindow):
             self.mir_panel.show()
             self.update_mirror_status()
             self.hint('Lustro: kliknij bryłę, a potem ścianę, względem której ma nastąpić odbicie.')
+        elif mode == 'pattern':
+            self.pat_panel.show()
+            self._pattern_kind_changed()
+            self.update_pattern_status()
+            self.hint('Szyk: kliknij bryłę lub szkic, ustaw rodzaj i parametry.')
         elif mode in ('move', 'rotate'):
             self.t_editor.show()
             self.t_status.setText('Kliknij obiekt, aby go zaznaczyć')
@@ -1758,6 +1851,8 @@ class StudioWindow(QMainWindow):
                 self.view.setCursor(Qt.SizeAllCursor if hit else Qt.ArrowCursor)
             elif self.mode == 'mirror' and self.mirror_id and self.mirror_frame is None:
                 self._hover_face_only(x, y)
+            elif self.mode == 'pattern' and self.pat_id and self.pat_kind.currentData() == 'path':
+                self.view._set_hover_edge(self.view.nearest_edge(x, y))
             elif self.mode == 'mod':
                 vertex = self.view.nearest_vertex(x, y)
                 self.view.hover_vertex = vertex[1] if vertex else None
@@ -1835,6 +1930,8 @@ class StudioWindow(QMainWindow):
             self.pick_edge(x, y, shift, ctrl)
         elif self.mode == 'mirror':
             self.pick_mirror(x, y)
+        elif self.mode == 'pattern':
+            self.pick_pattern(x, y)
         elif self.mode in ('move', 'rotate'):
             self.pick_transform_target(x, y)
         elif self.mode is None:
@@ -2472,6 +2569,139 @@ class StudioWindow(QMainWindow):
         self.run_operation('Odbicie lustrzane', build, apply, after=lambda: self.set_mode(None))
 
     # =====================================================================
+    # szyk: prostokątny / kołowy / wzdłuż linii (szkice i bryły), podgląd na żywo bez OCC
+    # =====================================================================
+    def reset_pattern(self):
+        self.pat_id, self.pat_path = None, None
+        self.view.tints = {}
+        self.view.set_preview_mesh(None)
+        self.view.set_selection_meshes(None)
+        self.update_pattern_status()
+
+    def _pattern_kind_changed(self):
+        kind = self.pat_kind.currentData()
+        self.pat_rect.setVisible(kind == 'rect')
+        self.pat_circ.setVisible(kind == 'circ')
+        self.pat_line.setVisible(kind == 'path')
+        self.pat_step2.setVisible(kind == 'path')
+        self.pat_panel.adjustSize()
+        self.update_pattern_status()
+
+    @staticmethod
+    def _mesh_bounds(mesh):
+        pts = mesh.vertices if len(mesh.vertices) else np.concatenate([e.reshape(-1, 3) for e in mesh.edges.values()])
+        return np.min(pts, axis=0), np.max(pts, axis=0)
+
+    def pick_pattern(self, x, y):
+        if self.pat_id is None:
+            bid = self.pick_object(x, y)
+            body = self.document.get(bid) if bid else None
+            if body is None or body.mesh is None:
+                self.toast('Kliknij bryłę lub szkic, który ma być powielony.')
+                return
+            self.pat_id = bid
+            self.view.tints = {bid: TINT_BASE}
+            low, high = self._mesh_bounds(body.mesh)
+            for spin, size in zip(self.pat_gaps, high - low):      # domyślny odstęp: wymiar obiektu + zapas
+                spin.blockSignals(True)
+                spin.setValue(round(float(size) * 1.25 + 1.0, 1))
+                spin.blockSignals(False)
+            self.pat_join.setChecked(False)
+            self.update_pattern_status()
+            return
+        if self.pat_kind.currentData() == 'path':
+            hit = self.view.nearest_edge(x, y)
+            if hit is None:
+                self.toast('Kliknij linię szkicu lub krawędź bryły jako ścieżkę.')
+                return
+            body = self.document.get(hit[0])
+            points = body.mesh.edges.get(hit[1]) if body is not None and body.mesh is not None else None
+            if points is None or len(points) < 2:
+                return
+            self.pat_path = np.asarray(points, float)
+            ends = self.pat_path[[0, -1]]
+            mesh = kernel.DisplayMesh(np.zeros((0, 3), np.float32), np.zeros((0, 3), np.uint32), {0: self.pat_path.astype(np.float32)}, tuple(ends[0]), 1.0)
+            self.view.set_selection_meshes([mesh], color=(.3, .8, .5, .5), line_color=(.1, .6, .3, 1))
+            self.update_pattern_status()
+
+    def update_pattern_status(self):
+        body = self.document.get(self.pat_id) if self.pat_id else None
+        path = self.pat_kind.currentData() == 'path'
+        if body is None:
+            self.pat_step1.set_state('active', 'Kliknij bryłę lub szkic')
+            self.pat_step2.set_state('pending', 'Najpierw wybierz obiekt')
+        else:
+            self.pat_step1.set_state('done', body.name)
+            self.pat_step2.set_state('done' if self.pat_path is not None else 'active', 'Wskazana' if self.pat_path is not None else 'Kliknij linię lub krawędź')
+        self.pat_join.setEnabled(body is not None and body.kind == 'solid')
+        if body is None or (path and self.pat_path is None):
+            self.pat_status.setText('Wybierz obiekt.' if body is None else 'Wskaż ścieżkę.')
+        self.refresh()
+        self._timers['pattern'].start()
+
+    def _pattern_ops(self, body):
+        kind = self.pat_kind.currentData()
+        low, high = self._mesh_bounds(body.mesh)
+        if kind == 'rect':
+            return kernel.pattern_ops('rect', dict(counts=[int(round(c.value())) for c in self.pat_counts], spacing=[g.value() for g in self.pat_gaps]))
+        if kind == 'circ':
+            axis = {'X': (1, 0, 0), 'Y': (0, 1, 0), 'Z': (0, 0, 1)}[self.pat_axis.currentData()]
+            pivot = (0.0, 0.0, 0.0) if self.pat_origin.isChecked() else tuple(float(c) for c in (low + high) / 2)
+            return kernel.pattern_ops('circ', dict(axis=axis, pivot=pivot, count=int(round(self.pat_ccount.value())), angle=self.pat_angle.value()))
+        return kernel.pattern_ops('path', dict(points=self.pat_path if self.pat_path is not None else [], count=int(round(self.pat_lcount.value())),
+                                               fit=self.pat_fit.isChecked(), spacing=self.pat_lgap.value()))
+
+    def update_pattern_preview(self):
+        """Podgląd na żywo: kopie siatki obiektu przekształcone macierzami (bez OCC), więc zmiana parametru jest natychmiastowa."""
+        if self.mode != 'pattern':
+            return
+        body = self.document.get(self.pat_id) if self.pat_id else None
+        if body is None or body.mesh is None or (self.pat_kind.currentData() == 'path' and self.pat_path is None):
+            self.view.set_preview_mesh(None)
+            return
+        try:
+            ops = self._pattern_ops(body)
+            mesh = kernel.pattern_mesh(body.mesh, ops)
+        except kernel.CadError as exc:
+            self.view.set_preview_mesh(None)
+            self.pat_status.setText(str(exc))
+            return
+        self.pat_status.setText(f'Kopie: {len(ops)} (razem z oryginałem {len(ops) + 1}).' if ops else 'Brak kopii - zwiększ ilość.')
+        self.view.set_preview_mesh(mesh, color=(.3, .8, .5, .55), line_color=(.05, .4, .2, 1), width=2)
+
+    def apply_pattern(self):
+        if self.busy:
+            return
+        body = self.document.get(self.pat_id) if self.pat_id else None
+        if body is None:
+            self.toast('Kliknij bryłę lub szkic, który ma być powielony.')
+            return
+        try:
+            ops = self._pattern_ops(body)
+        except kernel.CadError as exc:
+            self.toast(str(exc))
+            return
+        if not ops:
+            self.toast('Zwiększ ilość kopii.')
+            return
+        join = self.pat_join.isChecked() and body.kind == 'solid'
+
+        def build():
+            copies = [kernel.apply_op(body.shape, op) for op in ops]
+            if join:
+                merged = kernel.boolean('union', body.shape, copies)
+                return [body.changed(merged) if b.id == body.id else b for b in self.document.bodies]
+            made = [Body(f'{body.name} — szyk {i + 1}', sh, body.kind, body.plane).prepared() for i, sh in enumerate(copies)]
+            return [*self.document.bodies, *made]
+
+        def apply(new):
+            self.document.commit(new)
+            self.selected = []
+
+        self.view.set_preview_mesh(None)
+        self.run_operation('Szyk', build, apply, after=lambda: self.set_mode(None))
+
+    # =====================================================================
     # przesuwanie i obracanie zaznaczonych szkiców / brył z uchwytami 3D
     # =====================================================================
     def pick_transform_target(self, x, y):
@@ -2931,7 +3161,7 @@ class StudioWindow(QMainWindow):
             event.accept()
             return
         if key in (Qt.Key_Return, Qt.Key_Enter):
-            action = {'extrude': self.apply_extrude, 'bool': self.apply_bool, 'mod': self.apply_mod, 'mirror': self.apply_mirror,
+            action = {'extrude': self.apply_extrude, 'bool': self.apply_bool, 'mod': self.apply_mod, 'mirror': self.apply_mirror, 'pattern': self.apply_pattern,
                       'move': self.apply_transform, 'rotate': self.apply_transform}.get(self.mode)
             if action is None and self.mode == 'sketch' and self.tool == 'text' and self.txt and self.txt['stage'] == 'edit':
                 action = self.apply_text

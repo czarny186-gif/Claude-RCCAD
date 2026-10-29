@@ -104,6 +104,26 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
         p.drawPolygon(QPolygonF([QPointF(4, 36), QPointF(4, 22), QPointF(12, 29)]))
         p.drawPolygon(QPolygonF([QPointF(44, 36), QPointF(44, 22), QPointF(36, 29)]))
         pn = pen(ORANGE, 2.2); pn.setStyle(Qt.DashLine); p.setPen(pn); p.drawLine(QPointF(24, 4), QPointF(24, 44))
+    elif kind == 'x_pattern' or kind == 'x_pat_rect':
+        for r in range(2):
+            for c in range(3):
+                first = (r, c) == (0, 0)
+                p.setBrush(QColor(BLUE if first else BLUE_SOFT)); p.setPen(pen(BLUE, 2.0))
+                p.drawRoundedRect(QRectF(5 + c * 13.5, 10 + r * 15, 10, 10), 2.4, 2.4)
+        p.setPen(pen(ORANGE, 2.8)); p.drawLine(QPointF(10, 38), QPointF(38, 38))
+        p.setBrush(QColor(ORANGE)); p.setPen(Qt.NoPen); p.drawPolygon(QPolygonF([QPointF(43, 38), QPointF(35, 33.5), QPointF(35, 42.5)]))
+    elif kind == 'x_pat_circ':
+        pn = pen(ORANGE, 2.0); pn.setStyle(Qt.DashLine); p.setPen(pn); p.setBrush(Qt.NoBrush); p.drawEllipse(QPointF(24, 24), 15, 15)
+        for k in range(6):
+            a = math.radians(-90 + 60 * k)
+            cx, cy = 24 + 15 * math.cos(a), 24 + 15 * math.sin(a)
+            p.setBrush(QColor(BLUE if k == 0 else BLUE_SOFT)); p.setPen(pen(BLUE, 2.0)); p.drawRoundedRect(QRectF(cx - 4.5, cy - 4.5, 9, 9), 2.2, 2.2)
+        p.setBrush(QColor(ORANGE)); p.setPen(Qt.NoPen); p.drawEllipse(QPointF(24, 24), 2.6, 2.6)
+    elif kind == 'x_pat_path':
+        pn = pen(ORANGE, 2.2); pn.setStyle(Qt.DashLine); p.setPen(pn); p.drawLine(QPointF(6, 40), QPointF(42, 8))
+        for k in range(4):
+            cx, cy = 10 + k * 9.5, 36 - k * 8.5
+            p.setBrush(QColor(BLUE if k == 0 else BLUE_SOFT)); p.setPen(pen(BLUE, 2.0)); p.drawRoundedRect(QRectF(cx - 4.5, cy - 4.5, 9, 9), 2.2, 2.2)
     elif kind == 'x_text':
         p.setPen(pen(INK, 4.6)); p.drawLine(QPointF(10, 11), QPointF(34, 11)); p.drawLine(QPointF(22, 11), QPointF(22, 36))
         p.setPen(pen(BLUE, 2.4)); p.drawLine(QPointF(35, 20), QPointF(35, 36)); p.drawLine(QPointF(32, 20), QPointF(38, 20)); p.drawLine(QPointF(32, 36), QPointF(38, 36))
@@ -255,6 +275,10 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             for k in (9, 19, 29, 39):
                 p.drawLine(QPointF(k, 8), QPointF(k, 40)); p.drawLine(QPointF(8, k), QPointF(40, k))
             st(acc, 3.0); p.drawLine(QPointF(24, 6), QPointF(24, 42)); p.drawLine(QPointF(6, 24), QPointF(42, 24))
+        elif name == 'pattern':
+            for r in range(2):
+                for c in range(2):
+                    fl(_rounded(7 + c * 18, 7 + r * 18, 14, 14, 3), QColor(acc) if (r, c) == (0, 0) else soft)
         elif name == 'layers':
             for k, y in enumerate((30, 20, 10)):
                 q = poly([(24, y + 8), (42, y), (24, y - 8 + 0), (6, y)])
