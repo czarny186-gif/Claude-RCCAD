@@ -191,14 +191,14 @@ class StudioWindow(QMainWindow):
     # =====================================================================
     # budowa interfejsu (wymiary i kolory z CSS wersji HTML)
     # =====================================================================
-    def _panel(self, width, title, kind='sketch', subtitle='', color=None):
+    def _panel(self, width, title, kind='sketch', subtitle='', color=None, plain=False):
         frame = QFrame(self.view)
         frame.setObjectName('panel')
         frame.setFixedWidth(width)
         lay = QVBoxLayout(frame)
         lay.setContentsMargins(16, 15, 16, 15)
         lay.setSpacing(11)
-        lay.addWidget(ui.panel_header(kind, title, subtitle, color or ui.icons.BLUE))
+        lay.addWidget(ui.panel_header(kind, title, subtitle, color or ui.icons.BLUE, plain))
         ui.shadow(frame, 26, 7, 46)
         frame.hide()
         return frame, lay
@@ -567,9 +567,9 @@ class StudioWindow(QMainWindow):
         # --- tekst: powierzchnia -> obszar -> treść (jak kreator odbicia lustrzanego) ---
         self.txt = None
         self._text_ext = {}
-        self.text_panel, lay = self._panel(312, 'Tekst', 'sketch', 'Powierzchnia → obszar → treść')
-        self.txt_step1 = ui.StepRow(1, 'sym', 'Powierzchnia')
-        self.txt_step2 = ui.StepRow(2, 'sketch', 'Obszar napisu')
+        self.text_panel, lay = self._panel(312, 'Tekst', 'x_text', 'Powierzchnia → obszar → treść', plain=True)
+        self.txt_step1 = ui.StepRow(1, 'x_surface', 'Powierzchnia', plain=True)
+        self.txt_step2 = ui.StepRow(2, 'x_area', 'Obszar napisu', plain=True)
         lay.addWidget(self.txt_step1)
         lay.addWidget(self.txt_step2)
         self.text_form = QWidget()

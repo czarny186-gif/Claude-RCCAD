@@ -277,7 +277,7 @@ from PySide6.QtCore import Signal
 from . import icons
 
 
-def panel_header(kind: str, title: str, subtitle: str = '', color: str = icons.BLUE) -> QWidget:
+def panel_header(kind: str, title: str, subtitle: str = '', color: str = icons.BLUE, plain: bool = False) -> QWidget:
     box = QWidget()
     box.setObjectName('phead')
     lay = QHBoxLayout(box)
@@ -285,7 +285,7 @@ def panel_header(kind: str, title: str, subtitle: str = '', color: str = icons.B
     lay.setSpacing(10)
     pic = QLabel()
     pic.setObjectName('badge')
-    pic.setPixmap(icons.badge(kind, color, 36))
+    pic.setPixmap(icons.badge(kind, color, 36, plain))
     pic.setFixedSize(36, 36)
     lay.addWidget(pic)
     col = QVBoxLayout()
@@ -416,8 +416,9 @@ class RichMenu(QFrame):
 class StepRow(QFrame):
     """Graficzny krok kreatora (np. lustro): numer / ptaszek, ikona, tytuł i wartość. Stany: pending, active, done."""
 
-    def __init__(self, number, icon_kind, title):
+    def __init__(self, number, icon_kind, title, plain=False):
         super().__init__()
+        self.plain = plain
         self.number = number
         self.icon_kind = icon_kind
         self.setObjectName('step')
@@ -450,7 +451,7 @@ class StepRow(QFrame):
         self.mark.setStyleSheet(f'background:{accent};color:white;border-radius:13px;font-weight:800;border:none;')
         self.mark.setText('✓' if state == 'done' else str(self.number))
         self.pic.setStyleSheet('border:none;background:transparent;')
-        self.pic.setPixmap(icons.badge(self.icon_kind, accent, 34))
+        self.pic.setPixmap(icons.badge(self.icon_kind, accent, 34, self.plain))
         self.value.setText(value)
         self.value.setStyleSheet('color:#6c869b;border:none;')
         self.title.setStyleSheet('font-weight:700;color:#27415a;border:none;')

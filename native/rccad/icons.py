@@ -74,6 +74,23 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
         p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE)); p.drawPolygon(tri)
         p.setBrush(QColor('#d6f1e3')); p.setPen(pen(GREEN)); p.drawPolygon(mir)
         pn = pen(ORANGE, 2); pn.setStyle(Qt.DashLine); p.setPen(pn); p.drawLine(QPointF(24, 5), QPointF(24, 43))
+    elif kind == 'x_text':
+        p.setPen(pen(INK, 4.6)); p.drawLine(QPointF(10, 11), QPointF(34, 11)); p.drawLine(QPointF(22, 11), QPointF(22, 36))
+        p.setPen(pen(BLUE, 2.4)); p.drawLine(QPointF(35, 20), QPointF(35, 36)); p.drawLine(QPointF(32, 20), QPointF(38, 20)); p.drawLine(QPointF(32, 36), QPointF(38, 36))
+        p.setPen(pen(ORANGE, 3.2)); p.drawLine(QPointF(12, 42), QPointF(32, 42))
+    elif kind == 'x_surface':
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.2))
+        p.drawPolygon(QPolygonF([QPointF(4, 34), QPointF(16, 18), QPointF(42, 18), QPointF(30, 34)]))
+        p.setBrush(QColor(ORANGE)); p.setPen(pen('#ffffff', 1.6))
+        p.drawPolygon(QPolygonF([QPointF(26, 20), QPointF(26, 40), QPointF(31.5, 34.5), QPointF(35.5, 44), QPointF(39, 42.4), QPointF(35, 33), QPointF(42, 32.5)]))
+    elif kind == 'x_area':
+        pn = pen(BLUE, 2.2); pn.setStyle(Qt.DashLine); p.setPen(pn); p.setBrush(QColor(207, 228, 251, 150))
+        p.drawRect(QRectF(9, 13, 30, 22))
+        p.setBrush(QColor('#ffffff')); p.setPen(pen(BLUE, 2.2))
+        for cx, cy in ((9, 13), (39, 13), (9, 35), (39, 35)):
+            p.drawRect(QRectF(cx - 3.2, cy - 3.2, 6.4, 6.4))
+        p.setPen(pen(ORANGE, 3.0)); p.drawLine(QPointF(15, 19), QPointF(31, 29))
+        p.setBrush(QColor(ORANGE)); p.setPen(Qt.NoPen); p.drawPolygon(QPolygonF([QPointF(34, 31), QPointF(26, 31), QPointF(31, 24)]))
     elif kind == 'sketch':
         p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE)); p.drawRoundedRect(QRectF(8, 14, 28, 22), 3, 3)
         p.setPen(pen(ORANGE, 2.8)); p.drawLine(QPointF(30, 12), QPointF(42, 24))
@@ -249,11 +266,15 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
     return pm
 
 
-def badge(kind: str, color: str = BLUE, size: int = 34) -> QPixmap:
+def badge(kind: str, color: str = BLUE, size: int = 34, plain: bool = False) -> QPixmap:
     """Okrągła plakietka z ikoną (nagłówek panelu)."""
     scale = 2
     pm = QPixmap(size * scale, size * scale)
     pm.fill(Qt.transparent)
+    if plain:       # sama grafika, bez zaokrąglonego kwadratu
+        pm = pixmap(kind, size, scale)
+        pm.setDevicePixelRatio(scale)
+        return pm
     p = QPainter(pm)
     p.setRenderHint(QPainter.Antialiasing)
     tint, edge = QColor(color), QColor(color)
