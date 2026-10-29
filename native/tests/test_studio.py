@@ -98,6 +98,14 @@ class StudioTests(unittest.TestCase):
             solid=w._make_tools()[0]();self.assertAlmostEqual(solid.Volume(),2000,1)
             self.assertAlmostEqual(solid.BoundingBox().ylen,10*math.cos(math.radians(10))+10*math.sin(math.radians(10)),2)
 
+    def test_smallest_coplanar_region_wins_over_old_profile(self):
+        w=self.w;self.sketch('rect',(0,0),(20,20))
+        fr=k.Frame((0.0,0.0,0.0),(1.0,0.0,0.0),(0.0,0.0,-1.0))
+        c=Body('Szkic ściana',k.sketch_shape('circle',fr,[(10,-10),(13,-10)]),'sketch',fr).prepared();w.document.commit([*w.document.bodies,c]);w.refresh()
+        with patch.object(w.view,'_plane_hit',lambda pl,x,y:(5.0,np.array([10.0,10.0,0.0]))):
+            region=w._region_at(5,5)
+        self.assertIsNotNone(region);self.assertLess(region[2].Area(),100)
+
     def test_extrude_by_clicking_profile_with_preview(self):
         w=self.w;self.sketch('rect',(0,0),(20,10));w.set_mode('extrude')
         self.pick_sketch_profile(w.document.bodies[0]);w.ex_value.setValue(15)

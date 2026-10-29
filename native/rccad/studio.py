@@ -1895,18 +1895,26 @@ class StudioWindow(QMainWindow):
         return faces
 
     def _region_at(self, x, y):
-        """Obszar szkicu pod kursorem (nakładające się kształty tną się nawzajem): (odległość, płaszczyzna, ściana)."""
-        best = None
+        """Obszar szkicu pod kursorem (nakładające się kształty tną się nawzajem): (odległość, płaszczyzna, ściana).
+        Gdy kilka szkiców leży w tej samej płaszczyźnie (np. profil, z którego wyciągnięto bryłę, i nowy szkic na jej ścianie), wygrywa najmniejszy obszar."""
+        found = []
         for key, (plane, bodies) in self._drawn_sketches().items():
             hit = self.view._plane_hit(plane, x, y)
             if hit is None:
                 continue
             for face in self._regions_for(key, plane, bodies):
                 if kernel.face_contains(face, hit[1]):
-                    if best is None or hit[0] < best[0]:
-                        best = (hit[0], plane, face)
-                    break
-        return best
+                    try:
+                        area = float(face.Area())
+                    except Exception:
+                        area = float('inf')
+                    found.append((hit[0], area, plane, face))
+        if not found:
+            return None
+        nearest = min(f[0] for f in found)
+        tol = max(5e-3, 1e-4 * nearest)
+        t, _, plane, face = min((f for f in found if f[0] <= nearest + tol), key=lambda f: f[1])
+        return (t, plane, face)
 
     def _profile_at(self, x, y):
         region = self._region_at(x, y)
