@@ -1448,7 +1448,9 @@ class StudioWindow(QMainWindow):
             self.toast(str(exc))
             return
         self.view.set_preview_mesh(None)
-        self.create_sketch(shapes, 'Tekst')
+        q, t = self._text_params(), self.txt
+        self.create_sketch(shapes, 'Tekst', op=dict(type='text', params=dict(text=q['text'], anchor=[float(c) for c in t['anchor']], size=float(t['size']), font=q['font'],
+                                                                      bold=bool(q['bold']), italic=bool(q['italic']), angle=float(t['angle']))))
         self._text_set_stage('area')   # kolejny napis na tej samej powierzchni
 
     def text_cancel(self):
@@ -1589,9 +1591,12 @@ class StudioWindow(QMainWindow):
         meta = dict(tool=self.tool, points=[list(p) for p in points], sides=self.sides) if self.tool in self.EDITABLE and self.tool not in ('line', 'text') else None
         self.create_sketch([shape], 'Konstrukcja' if self.tool == 'construction' else ('Punkt' if self.tool == 'point' else None), meta)
 
-    def create_sketch(self, shapes, label=None, meta=None, select=False):
+    def create_sketch(self, shapes, label=None, meta=None, select=False, op=None):
         plane = self.sketch_plane
         name = f'{label or "Szkic"} {self._plane_label()}'
+        ids = [uuid.uuid4().hex for _ in shapes] if op else None
+        if op:
+            op = dict(op, plane=hist.plane_to_json(plane), name=name, out=ids)
         made = [replace(Body(name, sh, 'sketch', plane).prepared(), meta=meta) for sh in shapes] if select else None
 
         def after():
@@ -1602,8 +1607,15 @@ class StudioWindow(QMainWindow):
                 self._update_grips()
                 self.sk_hint.setText('Tekst: przesuń, skaluj lub obróć uchwytami · Tab – wysokość i kąt')
 
-        self.run_operation('Tworzenie szkicu', (lambda: made) if select else (lambda: [replace(Body(name, sh, 'sketch', plane).prepared(), meta=meta) for sh in shapes]),
-                           self.add_prepared_many, after=after if select else None)
+        def commit_new(bodies):
+            self.document.pending_op = op
+            if op and op.get('type') == 'text':
+                self.document.pending_icon = 'text'
+            self.add_prepared_many(bodies)
+
+        self.run_operation('Tworzenie szkicu', (lambda: made) if select else
+                           (lambda: [replace(Body(name, sh, 'sketch', plane, id=(ids[i] if ids else uuid.uuid4().hex)).prepared(), meta=meta) for i, sh in enumerate(shapes)]),
+                           commit_new, after=after if select else None)
         self.show_sketch_hint()
 
     def add_prepared_many(self, bodies):
@@ -3357,6 +3369,25 @@ class StudioWindow(QMainWindow):
                 field(caption, widget)
             self._hist_fields_extrude = dict(d1=d1, d2=d2, op=op, dir=direction)
             return lambda: dict(recipe, mode=op.currentData(), dir=direction.currentData(), d1=d1.value(), d2=d2.value())
+        if kind == 'text':
+            q = recipe['params']
+            text = QLineEdit(q['text'])
+            font = QFontComboBox()
+            font.setFontFilters(QFontComboBox.ScalableFonts)
+            font.setCurrentFont(QFont(q['font']))
+            size, angle = _spin(float(q['size']), .1, 1e4, 2, 1), _spin(float(q['angle']), -360, 360, 1, 5)
+            bold, italic = QCheckBox('Pogrubienie'), QCheckBox('Pochylenie')
+            bold.setChecked(bool(q['bold']))
+            italic.setChecked(bool(q['italic']))
+            field('Treść', text)
+            field('Czcionka', font)
+            field('Wysokość liter (mm)', size)
+            field('Kąt (°)', angle)
+            lay.addWidget(bold)
+            lay.addWidget(italic)
+            self._hist_text = dict(text=text, size=size)
+            return lambda: dict(recipe, params=dict(q, text=text.text(), font=font.currentFont().family(), size=size.value(), angle=angle.value(),
+                                                    bold=bold.isChecked(), italic=italic.isChecked()))
         if kind == 'transform':
             spins = [_spin(float(c), -1e6, 1e6, 3, 1) for c in recipe['v']]
             for caption, spin in zip(('X' if recipe['mode'] == 'move' else 'Obrót wokół X (°)', 'Y' if recipe['mode'] == 'move' else 'Obrót wokół Y (°)',

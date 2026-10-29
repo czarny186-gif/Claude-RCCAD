@@ -237,7 +237,17 @@ def run_bool(bodies, recipe):
     return [result if b.id == base.id else b for b in bodies if recipe.get('keep') or b.id not in gone]
 
 
-RUNNERS = {'extrude': run_extrude, 'pattern': run_pattern, 'mod': run_mod, 'transform': run_transform, 'mirror': run_mirror, 'bool': run_bool}
+def run_text(bodies, recipe):
+    """Dodaje szkic z tekstem (litery i ich otwory jako osobne druty) w zapisanej płaszczyźnie."""
+    plane = plane_from_json(recipe['plane'])
+    q = recipe['params']
+    shapes = kernel.text_shape(plane, q['text'], *q['anchor'], size=q['size'], font=q['font'], bold=q['bold'], italic=q['italic'], angle=q['angle'])
+    ids = list(recipe.get('out', ()))
+    ids += [uuid.uuid4().hex for _ in range(len(shapes) - len(ids))]
+    return [*bodies, *[Body(recipe['name'], sh, 'sketch', plane, id=ids[i]).prepared() for i, sh in enumerate(shapes)]]
+
+
+RUNNERS = {'text': run_text, 'extrude': run_extrude, 'pattern': run_pattern, 'mod': run_mod, 'transform': run_transform, 'mirror': run_mirror, 'bool': run_bool}
 
 
 def run_recipe(bodies, recipe):

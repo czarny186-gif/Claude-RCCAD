@@ -299,6 +299,9 @@ class StudioTests(unittest.TestCase):
             self.assertNotEqual(w.txt['angle'],0.0)
         before=len(w.document.bodies);ev=QKeyEvent(QEvent.KeyPress,Qt.Key_Return,Qt.NoModifier);w.keyPressEvent(ev);self.wait()
         self.assertGreater(len(w.document.bodies),before);self.assertEqual(w.txt['stage'],'area')
+        infos,cur=w.document.infos();self.assertEqual((infos[-1]['icon'],infos[-1]['op']['type']),('text','text'))
+        w.history_edit(cur);w._hist_text['text'].setText('Xy');w._hist_text['size'].setValue(7);w._history_edit_apply(cur,w._hist_fields);self.wait()
+        self.assertEqual(w.document.infos()[0][-1]['op']['params']['text'],'Xy');self.assertEqual(w.document.infos()[0][-1]['op']['params']['size'],7)
 
     def test_typed_dimensions_are_live(self):
         w=self.w;w.set_mode('plane');w.plane_picked('XY');w.choose_tool('rect');w.sketch_clicked('XY',0,0)
