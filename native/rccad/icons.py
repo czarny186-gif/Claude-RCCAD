@@ -283,6 +283,12 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
             for r in range(2):
                 for c in range(2):
                     fl(_rounded(7 + c * 18, 7 + r * 18, 14, 14, 3), QColor(acc) if (r, c) == (0, 0) else soft)
+        elif name == 'cut':
+            fl(_rounded(8, 14, 32, 26, 3), soft)
+            st(acc, 3.0); p.drawEllipse(QPointF(24, 27), 7, 7); p.drawLine(QPointF(24, 20), QPointF(24, 6)); p.drawPolyline(poly([(18, 13), (24, 20), (30, 13)]))
+        elif name == 'text':
+            st(ink, 3.4); p.drawLine(QPointF(11, 12), QPointF(37, 12)); p.drawLine(QPointF(24, 12), QPointF(24, 38))
+            st(acc, 3.0); p.drawLine(QPointF(17, 40), QPointF(31, 40))
         elif name == 'history':
             st(ink, 2.4); p.setBrush(Qt.NoBrush); p.drawEllipse(QPointF(24, 24), 16, 16)
             st(acc, 3.0); p.drawLine(QPointF(24, 24), QPointF(24, 13)); p.drawLine(QPointF(24, 24), QPointF(32, 28))

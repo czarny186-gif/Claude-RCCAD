@@ -14,6 +14,7 @@ from . import snap as snapping
 icons_green = '#2fa56d'
 icons_orange = '#f09a22'
 from .document import Body, Document
+from . import history as hist
 from .viewcube import ViewCube
 from . import sketchmeta as sm
 from .viewport import CadView, VIEWS as VIEWS_FOR_CUBE
@@ -83,6 +84,14 @@ def profile_face(wire):
         return cq.Face.makeFromWires(wire)
     except Exception:
         return None
+
+
+class _HistChip(QToolButton):
+    """Symbol kroku historii: klik = przeskok, dwuklik = edycja parametrów kroku."""
+    editRequested = Signal()
+
+    def mouseDoubleClickEvent(self, event):
+        self.editRequested.emit()
 
 
 class _Signals(QObject):
@@ -355,6 +364,14 @@ class StudioWindow(QMainWindow):
         self.hist_row.setSpacing(6)
         self.hist_scroll.setWidget(self.hist_inner)
         hl.addWidget(self.hist_scroll, 1)
+        self.hist_revert = QToolButton()
+        self.hist_revert.setObjectName('padTool')
+        self.hist_revert.setIcon(ui.style_icon('undo', 22))
+        self.hist_revert.setIconSize(QSize(22, 22))
+        self.hist_revert.setFixedSize(40, 36)
+        self.hist_revert.setToolTip('Cofnij ostatnią edycję kroku (przywraca poprzednią historię)')
+        self.hist_revert.clicked.connect(self.history_revert)
+        hl.addWidget(self.hist_revert)
         self.hist_ghost = QPushButton('Pokaż wygaszone')
         self.hist_ghost.setObjectName('chip')
         self.hist_ghost.setCheckable(True)
@@ -362,6 +379,14 @@ class StudioWindow(QMainWindow):
         self.hist_ghost.toggled.connect(lambda *_: self.refresh())
         hl.addWidget(self.hist_ghost)
         self.hist_bar.hide()
+        self.hist_edit = QFrame(v)
+        self.hist_edit.setObjectName('panel')
+        self.hist_edit_layout = QVBoxLayout(self.hist_edit)
+        self.hist_edit_layout.setContentsMargins(14, 12, 14, 12)
+        self.hist_edit_layout.setSpacing(6)
+        self.hist_edit.setFixedWidth(330)
+        self.hist_edit.hide()
+        ui.shadow(self.hist_edit, 19, 5, 43)
         self._hist_sig = None
         ui.shadow(self.hist_bar, 19, 5, 43)
         self.pad.adjustSize()
@@ -821,7 +846,7 @@ class StudioWindow(QMainWindow):
         self.ex_panel.move(18, 170)
         self.ex_bar.adjustSize()
         self.ex_bar.move(346, 170)
-        for w in (*self.tools.values(), self.shape_bar, self.clear_button, self.undo_button, self.redo_button, self.layers, self.xray, self.home, self.cube, self.pad, self.hist_bar,
+        for w in (*self.tools.values(), self.shape_bar, self.clear_button, self.undo_button, self.redo_button, self.layers, self.xray, self.home, self.cube, self.pad, self.hist_bar, self.hist_edit,
                   self.t_editor, self.sk_bar, self.origin_label, *self.panels, self.dim_panel, self.dim, self.notice):
             w.raise_()
 
@@ -2093,7 +2118,7 @@ class StudioWindow(QMainWindow):
             ray = self.view._ray(x, y)
             t = float(np.linalg.norm(np.asarray(hit[2], float) - ray[0])) if ray else 0.0
             solid = (t, dict(kind='face', id=body.id, face=face, wire=face.outerWire(), plane=None, normal=tuple(float(c) for c in normal),
-                             center=face.Center().toTuple()))
+                             center=face.Center().toTuple(), hit=tuple(float(c) for c in hit[2])))
         if region is not None and (solid is None or region[0] <= solid[0] + max(5e-3, 1e-4 * solid[0])):
             frame = kernel.frame_of(region[1])
             face = region[2]
@@ -2296,36 +2321,14 @@ class StudioWindow(QMainWindow):
         makers = self._make_tools()
         existing = list(self.document.bodies)
         spent = self._consumed_sketches(self.ex_profiles)
-
-        def fade(bodies):      # użyty szkic wygasa: widać tylko nowe, a stary wraca z historii albo przyciskiem „Pokaż wygaszone"
-            return [replace(b, visible=False) if b.id in spent else b for b in bodies]
+        recipe = dict(type='extrude', mode=op, dir=self.ex_dir.currentData(), d1=self.ex_value.value(), d2=self.ex_second.value(),
+                      profiles=hist.describe_profiles(self.ex_profiles), spent=sorted(spent))
 
         def build():
-            tools = [m() for m in makers]
-            if op == 'new':
-                return fade([*existing, *[Body('Wyciągnięcie', t).prepared() for t in tools]])
-            bodies = list(existing)
-            used = False
-            for tool in tools:
-                box = kernel.bounds(tool)
-                for i, b in enumerate(bodies):
-                    if b.kind != 'solid':
-                        continue
-                    other = kernel.bounds(b.shape)
-                    if (box.xmin > other.xmax + 1e-3 or box.xmax < other.xmin - 1e-3 or box.ymin > other.ymax + 1e-3 or
-                            box.ymax < other.ymin - 1e-3 or box.zmin > other.zmax + 1e-3 or box.zmax < other.zmin - 1e-3):
-                        continue
-                    key = {'join': 'union', 'cut': 'subtract', 'intersect': 'intersect'}[op]
-                    try:
-                        bodies[i] = b.changed(kernel.boolean(key, b.shape, [tool]))
-                        used = True
-                    except kernel.CadError:
-                        continue
-            if not used:
-                raise kernel.CadError('Nie ma bryły, z którą można wykonać tę operację. Profil musi dotykać bryły lub ją przecinać.')
-            return fade(bodies)
+            return hist.combine(existing, [m() for m in makers], op, spent)
 
         def apply(bodies):
+            self.document.pending_op = recipe
             self.document.commit(bodies)
             self.selected = [bodies[-1].id] if op == 'new' else []
 
@@ -3163,8 +3166,9 @@ class StudioWindow(QMainWindow):
     def _hist_update(self):
         if not self.hist_bar.isVisible():
             return
-        labels, current = self.document.timeline()
-        sig = (tuple(labels), current)
+        infos, current = self.document.infos()
+        sig = (tuple((i.get('label'), i.get('icon'), bool(i.get('stale'))) for i in infos), current, bool(self.document.backup))
+        self.hist_revert.setEnabled(bool(self.document.backup))
         if sig == self._hist_sig:
             return
         self._hist_sig = sig
@@ -3173,21 +3177,136 @@ class StudioWindow(QMainWindow):
             if item.widget():
                 item.widget().deleteLater()
         active = None
-        for i, text in enumerate(labels):
-            chip = QPushButton(f'{i}  {text}' if i else text)
-            chip.setObjectName('chip')
+        for i, info in enumerate(infos):
+            chip = _HistChip()
+            chip.setObjectName('padTool')
+            chip.setIcon(QIcon(ui.icons.pixmap('t_' + hist.ICONS.get(info.get('icon'), 'move'), 26)))
+            chip.setIconSize(QSize(26, 26))
+            chip.setFixedSize(42, 38)
             chip.setCheckable(True)
             chip.setChecked(i == current)
-            chip.setToolTip('Wróć do tego kroku' if i != current else 'Bieżący krok')
-            if i > current:      # cofnięte kroki: przyciemnione, można do nich wrócić
-                chip.setStyleSheet('QPushButton#chip { color:#9fb2c4; border-style:dashed; }')
+            editable = bool(info.get('op')) or info.get('icon') == 'sketch'
+            chip.setToolTip(f"{i}. {info.get('label', '')}" + ('\nKrok wymaga poprawy (nie dało się go przeliczyć)' if info.get('stale') else '')
+                            + ('\nDwuklik: edytuj parametry' if editable else ''))
+            style = []
+            if i > current:      # cofnięte kroki: przerywany obrys, można do nich wrócić
+                style.append('border-style:dashed; border-color:#9fb2c4;')
+            if info.get('stale'):
+                style.append('border:2px solid #e5262b;')
+            if style:
+                chip.setStyleSheet('QToolButton#padTool { ' + ' '.join(style) + ' }')
             chip.clicked.connect(lambda _=False, n=i: self.history_goto(n))
+            chip.editRequested.connect(lambda n=i: self.history_edit(n))
             self.hist_row.addWidget(chip)
             if i == current:
                 active = chip
         self.hist_row.addStretch(1)
         if active is not None:
             QTimer.singleShot(0, lambda a=active: self.hist_scroll.ensureWidgetVisible(a, 40, 0) if a.parent() else None)
+
+    def history_revert(self):
+        if self.busy or not self.document.backup:
+            return
+        self.document.restore_backup()
+        self.selected, self.edges = [], {}
+        self.refresh()
+
+    def history_edit(self, index):
+        """Edycja parametrów kroku (wymiary szkicu albo wyciągnięcie / wycięcie) i przeliczenie wszystkich następnych kroków."""
+        if self.busy:
+            return
+        states = self.document.states()
+        if not 0 < index < len(states):
+            return
+        bodies, info = states[index]
+        recipe = info.get('op')
+        if self.hist_edit.isVisible():
+            self.hist_edit.hide()
+        lay = self.hist_edit_layout
+        while lay.count():
+            item = lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        title = QLabel(f"Edycja kroku {index}: {info.get('label', '')}")
+        title.setObjectName('ptitle')
+        lay.addWidget(title)
+        if recipe and recipe.get('type') == 'extrude':
+            op = ui.Segmented([('Nowa', 'new', 'new'), ('Połącz', 'join', 'join'), ('Wytnij', 'cut', 'cut'), ('Wspólna', 'intersect', 'intersect')], 28)
+            op.setCurrentIndex(['new', 'join', 'cut', 'intersect'].index(recipe['mode']))
+            direction = ui.Segmented([('Jedna strona', 'one', 'one'), ('Symetrycznie', 'symmetric', 'sym'), ('Dwie strony', 'two', 'two')], 28)
+            direction.setCurrentIndex(['one', 'symmetric', 'two'].index(recipe.get('dir', 'one')))
+            d1, d2 = _spin(float(recipe['d1']), -1e5, 1e5, 2, 1), _spin(float(recipe.get('d2', 0)), 0, 1e5, 2, 1)
+            for caption, widget in (('Operacja', op), ('Kierunek', direction), ('Odległość (mm)', d1), ('Druga strona (mm)', d2)):
+                lay.addWidget(_label(caption, 'psub'))
+                lay.addWidget(widget)
+            fields = dict(kind='extrude', op=op, dir=direction, d1=d1, d2=d2)
+        else:
+            added = [b for b in bodies if b.kind == 'sketch' and b.meta and b.meta.get('tool') in sm.EDITABLE and b.id not in {x.id for x in states[index - 1][0]}]
+            if not added:
+                self.toast('Ten krok nie ma parametrów do edycji (edytować można wymiary szkicu oraz wyciągnięcie i wycięcie).')
+                return
+            target = added[0]
+            labels = sm.LABELS.get(target.meta['tool'], ())
+            edits = []
+            for caption, value in zip(labels, sm.values(target.meta)):
+                box = QLineEdit(value)
+                lay.addWidget(_label(caption, 'psub'))
+                lay.addWidget(box)
+                edits.append(box)
+            fields = dict(kind='sketch', target=target, edits=edits)
+        self._hist_fields = fields
+        row = QHBoxLayout()
+        for text, cb in (('Zastosuj', lambda: self._history_edit_apply(index, fields)), ('Anuluj', self.hist_edit.hide)):
+            b = QPushButton(text)
+            b.setObjectName('primary' if text == 'Zastosuj' else 'chip')
+            b.clicked.connect(lambda _=False, f=cb: f())
+            row.addWidget(b)
+        lay.addLayout(row)
+        self.hist_edit.adjustSize()
+        self.hist_edit.move(max(10, (self.view.width() - self.hist_edit.width()) // 2), self.hist_bar.y() - self.hist_edit.height() - 10)
+        self.hist_edit.show()
+        self.hist_edit.raise_()
+
+    def _history_edit_apply(self, index, fields):
+        states = self.document.states()
+        bodies, info = states[index]
+        try:
+            if fields['kind'] == 'extrude':
+                recipe = dict(info['op'], mode=fields['op'].currentData(), dir=fields['dir'].currentData(), d1=fields['d1'].value(), d2=fields['d2'].value())
+                new_info = dict(info, op=recipe)
+
+                def first():
+                    return tuple(hist.run_extrude(states[index - 1][0], recipe))
+            else:
+                target = fields['target']
+                values = []
+                for box in fields['edits']:
+                    values.append(float(box.text().replace(',', '.')))
+                meta = sm.apply_values(target.meta, values)
+                shape = self._meta_shape(target.plane, meta)
+                new_info = info
+
+                def first():
+                    return tuple(replace(b, shape=shape, mesh=kernel.display_mesh(shape), meta=meta) if b.id == target.id else b for b in bodies)
+        except (ValueError, kernel.CadError) as exc:
+            self.toast(str(exc) or 'Wpisz poprawne liczby.')
+            return
+        self.hist_edit.hide()
+
+        def build():
+            edited = first()
+            patched = list(states)
+            patched[index] = (bodies, new_info)
+            return hist.recompute(patched, index, edited)
+
+        def apply(result):
+            new_states, failed = result
+            self.document.rewrite(new_states, len(new_states) - 1)
+            self.selected, self.edges = [], {}
+            if failed:
+                self.toast(f'{failed} kroków nie dało się przeliczyć (oznaczone na czerwono) - popraw je albo cofnij edycję.', 7000)
+
+        self.run_operation('Przeliczanie historii', build, apply)
 
     def history_goto(self, index):
         if self.busy:
@@ -3212,11 +3331,12 @@ class StudioWindow(QMainWindow):
         def done(value):
             try:
                 self.document.pending_label = label
+                self.document.pending_icon = hist.LABEL_ICONS.get(label)
                 apply(value)
             except Exception as exc:
                 self.toast(str(exc))
             finally:
-                self.document.pending_label = None
+                self.document.pending_label = self.document.pending_icon = self.document.pending_op = None
                 finish()
                 self.refresh(fit)
                 if after:

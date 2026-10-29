@@ -194,6 +194,19 @@ class StudioTests(unittest.TestCase):
         w.history_goto(cur-1);self.assertTrue(w.document.get(sk.id).visible);self.assertEqual(len([b for b in w.document.bodies if b.kind=='solid']),0)
         w.history_goto(cur);self.assertEqual(len([b for b in w.document.bodies if b.kind=='solid']),1)
 
+    def test_history_edit_recomputes_following_steps_and_can_be_reverted(self):
+        w=self.w;self.sketch('rect',(0,0),(20,10));sk=w.document.bodies[0];w.set_mode('extrude');self.pick_sketch_profile(sk)
+        w.ex_value.setValue(5);w.apply_extrude();self.wait()
+        infos,cur=w.document.infos();last=len(infos)-1
+        self.assertEqual((infos[last]['icon'],infos[last]['op']['type']),('extrude','extrude'));self.assertEqual(infos[1]['icon'],'sketch')
+        vol=lambda:[b for b in w.document.bodies if b.kind=='solid'][0].shape.Volume()
+        self.assertAlmostEqual(vol(),1000,2)
+        w.history_edit(last);w._hist_fields['d1'].setValue(8);w._history_edit_apply(last,w._hist_fields);self.wait();self.assertAlmostEqual(vol(),1600,2)
+        w.history_edit(1);w._hist_fields['edits'][0].setText('30');w._history_edit_apply(1,w._hist_fields);self.wait()
+        self.assertAlmostEqual(vol(),2400,2);self.assertEqual(w.document.timeline()[1],last)       # krok sketch zmieniony, wyciągnięcie przeliczone
+        w.history_revert();self.assertAlmostEqual(vol(),1600,2)
+        w.hist_button.setChecked(True);self.app.processEvents();self.assertGreaterEqual(w.hist_row.count(),last+1)
+
     def test_chamfer(self):
         w=self.w;a=Body('A',k.box(20,20,20)).prepared();w.document.commit([a]);w.refresh();w.set_mode('mod');w.mod_kind.setCurrentIndex(1)
         w.edges={a.id:{0}};w.mod_size.setValue(2);w.apply_mod();self.wait();self.assertLess(w.document.bodies[0].shape.Volume(),8000)
