@@ -273,28 +273,66 @@ def diff_apply(old_prev, old_cur, new_prev):
     return [merged[i] for i in order], ok
 
 
-def recompute(states, k, edited_bodies):
-    """Po edycji kroku k (jego nowy wynik: edited_bodies) przelicza kolejne kroki. Zwraca (nowe stany, liczba nieprzeliczonych kroków).
-    Krok bez możliwości przeliczenia zostaje w osi czasu z oznaczeniem 'stale' i nie zmienia stanu."""
-    out = list(states[:k]) + [(tuple(edited_bodies), {key: v for key, v in states[k][1].items() if key != 'stale'})]
-    failed = 0
-    for j in range(k + 1, len(states)):
-        _, info = states[j]
+def rebuild(base, steps):
+    """Wykonuje kolejno kroki na stanie `base`. steps: lista (stan_przed_oryginalny, stan_po_oryginalny, info) - dwa pierwsze służą
+    krokom bez przepisu (przenoszenie różnicy). Krok wyłączony ('off') niczego nie zmienia; nieprzeliczalny dostaje 'stale'.
+    Zwraca (lista (bryły, info), liczba nieprzeliczonych)."""
+    out, failed, current = [], 0, tuple(base)
+    for before, after, info in steps:
         info = {key: v for key, v in info.items() if key != 'stale'}
-        base = out[-1][0]
         recipe = info.get('op')
         result = None
-        if recipe and recipe.get('type') in RUNNERS:
+        if info.get('off'):
+            result = current
+        elif recipe and recipe.get('type') in RUNNERS:
             try:
-                result = run_recipe(base, recipe)
+                result = run_recipe(current, recipe)
             except Exception:
                 result = None
         else:
-            merged, ok = diff_apply(states[j - 1][0], states[j][0], base)
+            merged, ok = diff_apply(before, after, current)
             result = tuple(merged) if ok else None
         if result is None:
             failed += 1
             info['stale'] = True
-            result = tuple(base)
+            result = current
         out.append((result, info))
+        current = result
     return out, failed
+
+
+def _steps(states, indices):
+    return [(states[j - 1][0], states[j][0], states[j][1]) for j in indices]
+
+
+def recompute(states, k, edited_bodies):
+    """Po edycji kroku k (jego nowy wynik: edited_bodies) przelicza kolejne kroki. Zwraca (nowe stany, liczba nieprzeliczonych kroków)."""
+    head = list(states[:k]) + [(tuple(edited_bodies), {key: v for key, v in states[k][1].items() if key != 'stale'})]
+    tail, failed = rebuild(edited_bodies, _steps(states, range(k + 1, len(states))))
+    return head + tail, failed
+
+
+def toggle_step(states, j):
+    """Wyłącza / włącza krok j (stan go pomija) i przelicza resztę."""
+    info = dict(states[j][1])
+    if info.get('off'):
+        info.pop('off')
+    else:
+        info['off'] = True
+    steps = [(states[j - 1][0], states[j][0], info), *_steps(states, range(j + 1, len(states)))]
+    tail, failed = rebuild(states[j - 1][0], steps)
+    return list(states[:j]) + tail, failed
+
+
+def delete_step(states, j):
+    """Usuwa krok j z osi czasu i przelicza następne."""
+    tail, failed = rebuild(states[j - 1][0], _steps(states, range(j + 1, len(states))))
+    return list(states[:j]) + tail, failed
+
+
+def move_step(states, j):
+    """Zamienia miejscami kroki j i j+1 (krok j przesuwa się później) i przelicza od j."""
+    steps = [(states[j][0], states[j + 1][0], states[j + 1][1]), (states[j - 1][0], states[j][0], states[j][1]),
+             *_steps(states, range(j + 2, len(states)))]
+    tail, failed = rebuild(states[j - 1][0], steps)
+    return list(states[:j]) + tail, failed

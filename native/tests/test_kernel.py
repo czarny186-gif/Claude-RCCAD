@@ -182,6 +182,11 @@ class DocumentTests(unittest.TestCase):
         out,failed=h.recompute(states,1,(wide,));self.assertEqual(failed,0)
         final={b.id:b for b in out[-1][0]};self.assertNotIn('c'*32,final)          # narzędzie połączone i usunięte
         self.assertGreater(final[a.id].shape.Volume(),2000);self.assertAlmostEqual(final['b'*32].shape.Volume(),2000,2)
+        base,_=h.toggle_step(states,3);vol=lambda st,i:{b.id:b for b in st[i][0]}[a.id].shape.Volume()
+        self.assertTrue(base[3][1]['off']);self.assertAlmostEqual(vol(base,3),1000,2);self.assertAlmostEqual(vol(base,5),1000,2)     # bez fazy bryła ma pełną objętość
+        gone,f2=h.delete_step(states,2);self.assertEqual((len(gone),f2),(len(states)-1,2))      # bez szyku odbicie i boolean nie mają obiektu: zostają oznaczone
+        self.assertTrue(gone[-1][1].get('stale'))
+        swapped,f3=h.move_step(states,3);self.assertEqual([i['icon'] for _,i in swapped[3:5]],['transform','mod'])
         mid=out[3][0];self.assertLess({b.id:b for b in mid}[a.id].shape.Volume(),2000)     # krok fazowania przeliczony na szerszej bryle
 
     def test_corrupted_project(self):

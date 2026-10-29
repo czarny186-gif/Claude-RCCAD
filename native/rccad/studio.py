@@ -3178,7 +3178,7 @@ class StudioWindow(QMainWindow):
         if not self.hist_bar.isVisible():
             return
         infos, current = self.document.infos()
-        sig = (tuple((i.get('label'), i.get('icon'), bool(i.get('stale'))) for i in infos), current, bool(self.document.backup))
+        sig = (tuple((i.get('label'), i.get('icon'), bool(i.get('stale')), bool(i.get('off'))) for i in infos), current, bool(self.document.backup))
         self.hist_revert.setEnabled(bool(self.document.backup))
         if sig == self._hist_sig:
             return
@@ -3202,18 +3202,68 @@ class StudioWindow(QMainWindow):
             style = []
             if i > current:      # cofnięte kroki: przerywany obrys, można do nich wrócić
                 style.append('border-style:dashed; border-color:#9fb2c4;')
+            if info.get('off'):      # krok wyłączony: wygaszony symbol
+                style.append('background:#e6ecf2; border-style:dotted; border-color:#9fb2c4;')
+                chip.setToolTip(chip.toolTip() + '\nKrok wyłączony (pomijany)')
             if info.get('stale'):
                 style.append('border:2px solid #e5262b;')
             if style:
                 chip.setStyleSheet('QToolButton#padTool { ' + ' '.join(style) + ' }')
             chip.clicked.connect(lambda _=False, n=i: self.history_goto(n))
             chip.editRequested.connect(lambda n=i: self.history_edit(n))
+            if i:
+                chip.setContextMenuPolicy(Qt.CustomContextMenu)
+                chip.customContextMenuRequested.connect(lambda pos, n=i, c=chip: self._history_menu(n, c.mapToGlobal(pos)))
             self.hist_row.addWidget(chip)
             if i == current:
                 active = chip
         self.hist_row.addStretch(1)
         if active is not None:
             QTimer.singleShot(0, lambda a=active: self.hist_scroll.ensureWidgetVisible(a, 40, 0) if a.parent() else None)
+
+    def _history_menu(self, index, pos):
+        from PySide6.QtWidgets import QMenu
+        states = self.document.states()
+        if not 0 < index < len(states) or self.busy:
+            return
+        menu = QMenu(self)
+        edit = menu.addAction('Edytuj parametry…')
+        off = menu.addAction('Włącz krok' if states[index][1].get('off') else 'Wyłącz krok')
+        menu.addSeparator()
+        left = menu.addAction('Przesuń wcześniej')
+        right = menu.addAction('Przesuń później')
+        left.setEnabled(index > 1)
+        right.setEnabled(index < len(states) - 1)
+        menu.addSeparator()
+        delete = menu.addAction('Usuń krok')
+        chosen = menu.exec(pos)
+        if chosen is edit:
+            self.history_edit(index)
+        elif chosen is off:
+            self.history_restructure(lambda st: hist.toggle_step(st, index))
+        elif chosen is left:
+            self.history_restructure(lambda st: hist.move_step(st, index - 1))
+        elif chosen is right:
+            self.history_restructure(lambda st: hist.move_step(st, index))
+        elif chosen is delete:
+            self.history_restructure(lambda st: hist.delete_step(st, index))
+
+    def history_restructure(self, change):
+        """Wyłączenie / usunięcie / zmiana kolejności kroku: nowa oś czasu jest przeliczana w tle, poprzednią można przywrócić strzałką."""
+        if self.busy:
+            return
+        states = self.document.states()
+        if self.mode is not None:
+            self.set_mode(None)
+
+        def apply(result):
+            new_states, failed = result
+            self.document.rewrite(new_states, len(new_states) - 1)
+            self.selected, self.edges = [], {}
+            if failed:
+                self.toast(f'{failed} kroków nie dało się przeliczyć (oznaczone na czerwono) - popraw je albo cofnij zmianę.', 7000)
+
+        self.run_operation('Przeliczanie historii', lambda: change(states), apply)
 
     def history_revert(self):
         if self.busy or not self.document.backup:
