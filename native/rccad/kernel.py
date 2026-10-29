@@ -327,6 +327,81 @@ def boolean(operation, base, tools):
         raise CadError("Operacja na bryłach nie powiodła się. Sprawdź ich przecięcie.") from exc
 
 
+def _corner_directions(shape, point, size):
+    """Kierunki (jednostkowe, od wierzchołka) trzech krawędzi schodzących się w narożniku."""
+    p = np.asarray(point, dtype=float)
+    dirs = []
+    for i in edges_at_point(shape, p):
+        edge = shape.Edges()[i]
+        start = float(np.linalg.norm(np.array(edge.positionAt(0.0).toTuple()) - p)) < 2e-3
+        t = np.array(edge.tangentAt(0.0 if start else 1.0).toTuple(), dtype=float)
+        t = t if start else -t
+        n = float(np.linalg.norm(t))
+        if n < 1e-9:
+            continue
+        if edge.Length() < size * 1.0005:
+            raise CadError("Wartość jest za duża dla krawędzi przy tym narożniku. Zmniejsz ją.")
+        dirs.append(t / n)
+    if len(dirs) != 3:
+        raise CadError("Faza i zaokrąglenie narożnika działają dla narożników z trzema krawędziami.")
+    return dirs
+
+
+def vertex_handle(shape, point):
+    """Wierzchołek i kierunek do wnętrza bryły (średnia kierunków krawędzi) - strzałka rozmiaru narożnika."""
+    total = np.sum(_corner_directions(shape, point, 0.0), axis=0)
+    n = float(np.linalg.norm(total))
+    if n < 1e-6:
+        raise CadError("Nie można wyznaczyć kierunku narożnika.")
+    return tuple(float(c) for c in point), tuple(float(c) for c in total / n)
+
+
+def _tetra(a, b, c, d):
+    pts = [cq.Vector(*[float(x) for x in q]) for q in (a, b, c, d)]
+    faces = [cq.Face.makeFromWires(cq.Wire.makePolygon([pts[i], pts[j], pts[k], pts[i]])) for i, j, k in ((0, 1, 2), (0, 1, 3), (1, 2, 3), (0, 2, 3))]
+    solid = cq.Solid.makeSolid(cq.Shell.makeShell(faces))
+    if solid.Volume() < 0:
+        solid = cq.Solid(solid.wrapped.Reversed())
+    return solid
+
+
+def blend_vertices(shape, points, size, kind="fillet"):
+    """Sam narożnik: faza = ścięcie rogu płaszczyzną przez punkty oddalone o `size` wzdłuż trzech krawędzi;
+    zaokrąglenie = ścięcie kulistą czaszą przechodzącą przez te punkty. Krawędzie poza narożnikiem zostają ostre."""
+    size = positive(size, "Rozmiar narożnika")
+    result = shape
+    for point in points:
+        v = np.asarray(point, dtype=float)
+        dirs = _corner_directions(result, v, size)
+        p = [v + d * size for d in dirs]
+        centroid = sum(p) / 3.0
+        apex = v + (v - centroid)
+        tool = _tetra(p[0], p[1], p[2], apex)
+        if kind != "chamfer":
+            a, b, c = p
+            nrm = np.cross(b - a, c - a)
+            ln = float(np.linalg.norm(nrm))
+            if ln < 1e-9:
+                raise CadError("Narożnik jest zdegenerowany.")
+            nrm = nrm / ln
+            if float(nrm @ (v - a)) > 0:
+                nrm = -nrm                      # w głąb bryły, od wierzchołka
+            # środek okręgu opisanego na trójkącie
+            ab, ac = b - a, c - a
+            cross = np.cross(ab, ac)
+            circ = a + (np.cross(cross, ab) * float(ac @ ac) + np.cross(ac, cross) * float(ab @ ab)) / (2.0 * float(cross @ cross))
+            r = float(np.linalg.norm(circ - a))
+            big = r * 1.35
+            center = circ + nrm * float(np.sqrt(max(big * big - r * r, 0.0)))
+            ball = cq.Solid.makeSphere(big, cq.Vector(*[float(x) for x in center]), cq.Vector(0, 0, 1), -90, 90, 360)
+            tool = boolean("subtract", tool, [ball])
+        try:
+            result = boolean("subtract", result, [tool])
+        except CadError as exc:
+            raise CadError("Nie udało się obrobić narożnika. Zmniejsz wartość.") from exc
+    return valid(result)
+
+
 def blend(shape, indices, size, kind="fillet"):
     size = positive(size, "Promień / odległość")
     edges = shape.Edges()

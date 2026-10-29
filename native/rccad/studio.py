@@ -165,6 +165,7 @@ class StudioWindow(QMainWindow):
         self.view.viewHover.connect(self.view_hover)
         self.view.viewDoubleClicked.connect(self.view_double_clicked)
         self._mod_face_mesh = None
+        self.mod_vertices = {}
         self.view.contextRequested.connect(self.context_menu)
         self.view.handleDragged.connect(self.handle_dragged)
         self.view.handleReleased.connect(self.handle_released)
@@ -909,6 +910,7 @@ class StudioWindow(QMainWindow):
         self.override = {}
         self.txt = None
         self._mod_face_mesh = None
+        self.mod_vertices = {}
         self.view.sel_vertices = []
         self.view.hover_vertex = None
         self.view.sketch_box = None
@@ -942,6 +944,7 @@ class StudioWindow(QMainWindow):
         self.mirror_id = None
         self.mirror_frame = None
         self.pat_id, self.pat_path = None, None
+        self.mod_vertices = {}
         self.t_target = None
         self.edges = {}
         self._hover_key = None
@@ -2350,19 +2353,18 @@ class StudioWindow(QMainWindow):
 
     def pick_edge(self, x, y, shift, ctrl):
         vertex = self.view.nearest_vertex(x, y)
-        if vertex is not None:       # narożnik: obejmuje wszystkie krawędzie schodzące się w wierzchołku
+        if vertex is not None:       # sam narożnik: faza / zaokrąglenie rogu (krawędzie zostają ostre)
             bid, point = vertex
             body = self.document.get(bid)
             if body is None or body.kind != 'solid':
                 return
-            ids = {i for i in kernel.edges_at_point(body.shape, point) if i in body.mesh.edges}
-            if ids:
-                self._mod_select(bid, ids, shift, ctrl, mark=point)
+            self._mod_vertex_select(bid, np.asarray(point, float), shift, ctrl)
             return
         hit = self.view.nearest_edge(x, y, True)
         if hit is None:
             if not (shift or ctrl):
                 self.edges = {}
+                self.mod_vertices = {}
                 self.view.sel_vertices = []
                 self._mod_face_mesh = None
             self.update_mod_status()
@@ -2373,7 +2375,26 @@ class StudioWindow(QMainWindow):
             return
         self._mod_select(bid, set(kernel.edge_chain(body.shape, index)) if ctrl else {index}, shift, ctrl)
 
+    def _mod_vertex_select(self, bid, point, shift, ctrl):
+        if not (shift or ctrl) or bid not in self.mod_vertices:
+            if not self.mod_vertices and not any(self.edges.values()):
+                self.mod_size.blockSignals(True)
+                self.mod_size.setValue(2.0)
+                self.mod_size.blockSignals(False)
+            self.mod_vertices = {bid: []}
+        points = self.mod_vertices[bid]
+        same = [q for q in points if float(np.linalg.norm(q - point)) < 1e-3]
+        if (shift or ctrl) and same:
+            points[:] = [q for q in points if all(q is not r for r in same)]
+        else:
+            points.append(point)
+        self.edges = {}
+        self._mod_face_mesh = None
+        self.view.sel_vertices = list(points)
+        self.update_mod_status()
+
     def _mod_select(self, bid, ids, shift, ctrl, mark=None):
+        self.mod_vertices = {}
         if not (shift or ctrl) or bid not in self.edges:
             if not any(self.edges.values()):
                 self.mod_size.blockSignals(True)
@@ -2415,6 +2436,7 @@ class StudioWindow(QMainWindow):
             self.mod_size.setValue(2.0)
             self.mod_size.blockSignals(False)
         self.edges = {body.id: ids}
+        self.mod_vertices = {}
         self.view.sel_vertices = []
         self.update_mod_status()
         self._mod_face_mesh = mesh
@@ -2422,7 +2444,10 @@ class StudioWindow(QMainWindow):
 
     def update_mod_status(self):
         count = sum(len(v) for v in self.edges.values())
-        self.mod_status.setText(f'Zaznaczone krawędzie: {count}' if count else 'Kliknij krawędź lub narożnik; dwuklik w ścianę zaznacza cały jej obwód.')
+        vcount = sum(len(v) for v in self.mod_vertices.values())
+        self.mod_status.setText(f'Zaznaczone narożniki: {vcount}' if vcount else (f'Zaznaczone krawędzie: {count}' if count else
+                                'Kliknij krawędź lub narożnik; dwuklik w ścianę zaznacza cały jej obwód.'))
+        count += vcount
         if not count:
             self.view.sel_vertices = []
             self._mod_face_mesh = None
@@ -2432,6 +2457,17 @@ class StudioWindow(QMainWindow):
         self._timers['mod'].start()
 
     def _place_mod_handle(self):
+        if self.mode == 'mod' and self.mod_vertices:
+            bid, pts = next(iter(self.mod_vertices.items()))
+            body = self.document.get(bid)
+            try:
+                mid, direction = kernel.vertex_handle(body.shape, pts[-1])
+            except Exception:
+                self.view.set_handles([])
+                return
+            mid, d = np.array(mid, float), np.array(direction, float)
+            self.view.set_handles([dict(id='mod', start=mid, tip=mid + d * self.mod_size.value(), dir=d, color=(.94, .6, .13, 1))])
+            return
         if self.mode != 'mod' or len(self.edges) != 1 or not next(iter(self.edges.values()), None):
             self.view.set_handles([])
             return
@@ -2447,43 +2483,58 @@ class StudioWindow(QMainWindow):
     def update_mod_preview(self):
         if self.mode != 'mod':
             return
-        if len(self.edges) != 1 or not next(iter(self.edges.values()), None):
+        verts = bool(self.mod_vertices and next(iter(self.mod_vertices.values()), None))
+        if not verts and (len(self.edges) != 1 or not next(iter(self.edges.values()), None)):
             self.cancel_previews()
             self.view.set_preview_mesh(None)
             return
-        bid, ids = next(iter(self.edges.items()))
+        if verts:
+            bid, pts = next(iter(self.mod_vertices.items()))
+            sig, count, label = ('v', bid, tuple(tuple(np.round(q, 3)) for q in pts)), len(pts), 'narożniki'
+            ids = None
+        else:
+            bid, ids = next(iter(self.edges.items()))
+            ids = set(ids)
+            sig, count, label = ('e', bid, frozenset(ids)), len(ids), 'krawędzie'
         body = self.document.get(bid)
         if body is None:
             return
-        size, kind, ids = self.mod_size.value(), self.mod_kind.currentData(), set(ids)
+        size, kind = self.mod_size.value(), self.mod_kind.currentData()
+        self._mod_sig = sig
+        points = [np.array(q, float) for q in (self.mod_vertices.get(bid) or [])] if verts else None
 
         def compute():
-            result = kernel.blend(body.shape, ids, size, kind)
+            result = kernel.blend_vertices(body.shape, points, size, kind) if verts else kernel.blend(body.shape, ids, size, kind)
             return kernel.display_mesh(result, PREVIEW_TOL), result.Volume() > body.shape.Volume() + 1e-6
 
         def show(value, error):
-            if self.mode != 'mod' or self.edges.get(bid) != ids:
+            if self.mode != 'mod' or getattr(self, '_mod_sig', None) != sig:
                 return
             if error or value is None:
                 self.view.set_preview_mesh(None)
-                self.mod_status.setText(f'Zaznaczone krawędzie: {len(ids)}\nTa wartość jest za duża dla wybranych krawędzi.')
+                self.mod_status.setText(f'Zaznaczone {label}: {count}\n' + (str(error) if verts and error else 'Ta wartość jest za duża dla wybranych elementów.'))
                 return
             mesh, adds = value
             self.view.set_preview_mesh(mesh, color=(.25, .8, .45, .6) if adds else (.95, .55, .2, .6),
                                        line_color=(.1, .4, .2, 1) if adds else (.55, .3, .05, 1), width=2)
-            self.mod_status.setText(f'Zaznaczone krawędzie: {len(ids)}\n' + ('Zielony podgląd: dodaje materiał.' if adds else 'Pomarańczowy podgląd: usuwa materiał.'))
+            self.mod_status.setText(f'Zaznaczone {label}: {count}\n' + ('Zielony podgląd: dodaje materiał.' if adds else 'Pomarańczowy podgląd: usuwa materiał.'))
 
         self.run_preview('mod', compute, show)
     def apply_mod(self):
         if self.busy:
             return
-        if len(self.edges) != 1 or not next(iter(self.edges.values()), None):
-            self.toast('Zaznacz krawędzie jednej bryły.')
+        verts = bool(self.mod_vertices and next(iter(self.mod_vertices.values()), None))
+        if not verts and (len(self.edges) != 1 or not next(iter(self.edges.values()), None)):
+            self.toast('Zaznacz krawędzie lub narożniki jednej bryły.')
             return
-        bid, ids = next(iter(self.edges.items()))
+        if verts:
+            bid, pts = next(iter(self.mod_vertices.items()))
+            points, ids = [np.array(q, float) for q in pts], None
+        else:
+            bid, ids = next(iter(self.edges.items()))
+            ids, points = set(ids), None
         body = self.document.get(bid)
         size, kind = self.mod_size.value(), self.mod_kind.currentData()
-        ids = set(ids)
 
         def apply(new):
             self.document.commit([new if b.id == body.id else b for b in self.document.bodies])
@@ -2491,8 +2542,8 @@ class StudioWindow(QMainWindow):
 
         self.view.set_preview_mesh(None)
         self.view.set_handles([])
-        self.run_operation('Zaokrąglanie' if kind == 'fillet' else 'Fazowanie', lambda: body.changed(kernel.blend(body.shape, ids, size, kind)), apply,
-                           after=lambda: self.set_mode(None))
+        work = (lambda: body.changed(kernel.blend_vertices(body.shape, points, size, kind))) if verts else (lambda: body.changed(kernel.blend(body.shape, ids, size, kind)))
+        self.run_operation('Zaokrąglanie' if kind == 'fillet' else 'Fazowanie', work, apply, after=lambda: self.set_mode(None))
 
     # =====================================================================
     # lustro

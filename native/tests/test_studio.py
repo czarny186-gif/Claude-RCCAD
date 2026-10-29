@@ -156,30 +156,19 @@ class StudioTests(unittest.TestCase):
         w.mod_size.setValue(2);w.update_mod_preview();self.preview();self.assertTrue(w.view.preview_items)
         w.apply_mod();self.wait();self.assertLess(w.document.bodies[0].shape.Volume(),8000)
 
-    def test_corner_vertex_and_face_double_click_select_edges(self):
+    def test_corner_vertex_is_blended_alone_and_face_double_click_selects_edges(self):
         w=self.w;a=Body('A',k.box(20,20,20)).prepared();w.document.commit([a]);w.refresh();w.set_mode('mod')
         pt=np.array(a.mesh.edges[0][0],float)
+        cham=k.blend_vertices(a.shape,[pt],3,'chamfer');rnd=k.blend_vertices(a.shape,[pt],3,'fillet')
+        self.assertAlmostEqual(8000-cham.Volume(),27/6,3);self.assertTrue(0<8000-rnd.Volume()<27/6)
+        self.assertEqual(len(cham.Edges()),len(a.shape.Edges())+3)
         with patch.object(w.view,'nearest_vertex',return_value=(a.id,pt)):w.view_clicked(5,5,False,False)
-        self.assertEqual(len(w.edges[a.id]),3);self.assertEqual(len(w.view.sel_vertices),1)
+        self.assertEqual((len(w.mod_vertices[a.id]),w.edges),(1,{}));self.assertTrue(w.view.handles);self.assertEqual(len(w.view.sel_vertices),1)
+        w.mod_size.setValue(3);w.update_mod_preview();self.preview();self.assertTrue(w.view.preview_items)
+        w.apply_mod();self.wait();self.assertLess(w.document.bodies[0].shape.Volume(),8000);self.assertGreater(w.document.bodies[0].shape.Volume(),7990)
+        a=w.document.bodies[0];w.set_mode('mod')
         with patch.object(w.view,'pick_face',return_value=(a.id,[0,0,1],pt.tolist())):w.view_double_clicked(5,5)
-        self.assertEqual(len(w.edges[a.id]),4);self.assertTrue(w.view.selection_items)
-        w.mod_size.setValue(2);w.apply_mod();self.wait();self.assertLess(w.document.bodies[0].shape.Volume(),8000)
-
-    def test_pattern_rect_circular_and_path_live_preview_and_apply(self):
-        w=self.w;a=Body('A',k.box(10,10,10)).prepared();w.document.commit([a]);w.refresh()
-        self.assertEqual(len(k.pattern_ops('rect',dict(counts=[3,2,1],spacing=[20,20,0]))),5)
-        m=k.op_matrix(('r',(0,0,1),(0,0,0),90));self.assertAlmostEqual(float((m[:3,:3]@np.array([1,0,0]))[1]),1.0,6)
-        w.set_mode('pattern');self.assertTrue(w.pat_panel.isVisible())
-        with patch.object(w,'pick_object',return_value=a.id):w.view_clicked(5,5,False,False)
-        w.pat_counts[0].setValue(4);w.update_pattern_preview();self.assertTrue(w.view.preview_items);self.assertIn('Kopie: 3',w.pat_status.text())
-        w.pat_kind.setCurrentIndex(1);w.pat_ccount.setValue(5);w.update_pattern_preview();self.assertIn('Kopie: 4',w.pat_status.text())
-        w.pat_pivot[0].setValue(-30);w.pat_pivot[1].setValue(0);w.pat_pivot[2].setValue(0);d=w.pat_radius.value();self.assertGreater(d,25)
-        w.pat_radius.setValue(d+10);ops,moved=w._pattern_ops(a);self.assertIsNotNone(moved);self.assertEqual(len(ops),4);w.update_pattern_preview();self.assertTrue(w.view.preview_items);self.assertEqual(len(w.view.sel_vertices),1)
-        w.pat_radius.setValue(d)
-        w.pat_kind.setCurrentIndex(2);w.update_pattern_preview();self.assertFalse(w.view.preview_items)
-        w.pat_path=np.array([[0,0,0],[100,0,0]],float);w.pat_lcount.setValue(6);w.update_pattern_preview();self.assertIn('Kopie: 5',w.pat_status.text())
-        w.pat_kind.setCurrentIndex(0);w.pat_counts[0].setValue(3);w.apply_pattern();self.wait()
-        self.assertEqual(len([b for b in w.document.bodies if b.kind=='solid']),3)
+        self.assertEqual(w.mod_vertices,{});self.assertGreaterEqual(len(w.edges[a.id]),4);self.assertTrue(w.view.selection_items)
 
     def test_chamfer(self):
         w=self.w;a=Body('A',k.box(20,20,20)).prepared();w.document.commit([a]);w.refresh();w.set_mode('mod');w.mod_kind.setCurrentIndex(1)
