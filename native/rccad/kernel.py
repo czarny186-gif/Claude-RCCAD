@@ -621,6 +621,26 @@ def profile_normal(shape, reference):
     return tuple(float(c) for c in n)
 
 
+def actual_frame(shape, plane, tol=1e-4):
+    """Płaszczyzna, w której naprawdę leży szkic: ta sama, jeśli nie ruszano szkicu; po obrocie / przesunięciu - nowa Frame wyliczona z geometrii."""
+    fr = frame_of(plane)
+    n0, o0 = np.array(fr.normal, float), np.array(fr.origin, float)
+    try:
+        pts = np.array([e.positionAt(t).toTuple() for e in shape.Edges() for t in (0.0, .37, .71, 1.0)], dtype=float)
+        if len(pts) and float(np.max(np.abs((pts - o0) @ n0))) < tol:
+            return plane
+        n = np.array(profile_normal(shape, n0), dtype=float)
+        origin = n * float(n @ pts[0])
+        x = np.array(fr.xdir, float) - n * float(np.array(fr.xdir, float) @ n)
+        if np.linalg.norm(x) < 1e-6:
+            x = np.cross(n, [0.0, 0.0, 1.0] if abs(n[2]) < .9 else [1.0, 0.0, 0.0])
+        x = x / np.linalg.norm(x)
+        r = lambda a: tuple(round(float(c), 9) + 0.0 for c in a)
+        return Frame(r(origin), r(x), r(n))
+    except Exception:
+        return plane
+
+
 def extrude2(wire, plane, d1, d2):
     """Wyciągnięcie w dwie strony niezależnie: d1 po normalnej, d2 przeciwnie."""
     d1, d2 = float(d1), float(d2)

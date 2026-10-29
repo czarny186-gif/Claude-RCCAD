@@ -1610,7 +1610,14 @@ class StudioWindow(QMainWindow):
         groups = {}
         for b in self.document.bodies:
             if b.kind == 'sketch' and b.visible and not b.name.startswith(('Konstrukcja', 'Punkt')):
-                groups.setdefault(self._plane_key(b.plane), (b.plane, []))[1].append(b)
+                cache = self.__dict__.setdefault('_frame_cache', {})
+                hit = cache.get(id(b.shape))
+                if hit is None or hit[0] is not b.shape or hit[2] != b.plane:
+                    hit = cache[id(b.shape)] = (b.shape, kernel.actual_frame(b.shape, b.plane), b.plane)
+                    if len(cache) > 400:
+                        cache.clear()
+                plane = hit[1]   # obrócony / przesunięty szkic ma własną płaszczyznę
+                groups.setdefault(self._plane_key(plane), (plane, []))[1].append(b)
         return groups
 
     def _regions_for(self, key, plane, bodies):

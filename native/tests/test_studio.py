@@ -87,11 +87,16 @@ class StudioTests(unittest.TestCase):
         from dataclasses import replace as rep
         w=self.w;self.sketch('rect',(0,0),(20,10));b=w.document.bodies[0]
         tilted=k.transform(b.shape,(0,0,0),(10,0,0));w.document.commit([rep(b,shape=tilted,mesh=k.display_mesh(tilted))])
-        with patch.object(w,'_region_at',return_value=None),patch.object(w.view,'pick_face',return_value=None),patch.object(w.view,'pick_profile',return_value=b.id):
-            src=w._profile_at(5,5)
-        self.assertIsNone(src['plane']);self.assertAlmostEqual(abs(src['normal'][2]),math.cos(math.radians(10)),4);self.assertGreater(abs(src['normal'][1]),.1)
-        solid=k.extrude_dir(src['wire'],src['normal'],10)
-        self.assertAlmostEqual(solid.Volume(),2000,1);self.assertAlmostEqual(solid.BoundingBox().ylen,10*math.cos(math.radians(10))+10*math.sin(math.radians(10)),2)
+        centre=np.array(tilted.Center().toTuple())
+        for patches in (dict(),dict(_region_at=None)):
+            with patch.object(w.view,'_plane_hit',lambda pl,x,y:(1.0,centre)),patch.object(w.view,'pick_face',return_value=None),patch.object(w.view,'pick_profile',return_value=b.id):
+                if patches:
+                    with patch.object(w,'_region_at',return_value=None):src=w._profile_at(5,5)
+                else:src=w._profile_at(5,5)
+            self.assertAlmostEqual(abs(src['normal'][2]),math.cos(math.radians(10)),4);self.assertGreater(abs(src['normal'][1]),.1)
+            w.ex_profiles=[src];w.ex_value.setValue(10)
+            solid=w._make_tools()[0]();self.assertAlmostEqual(solid.Volume(),2000,1)
+            self.assertAlmostEqual(solid.BoundingBox().ylen,10*math.cos(math.radians(10))+10*math.sin(math.radians(10)),2)
 
     def test_extrude_by_clicking_profile_with_preview(self):
         w=self.w;self.sketch('rect',(0,0),(20,10));w.set_mode('extrude')
