@@ -201,7 +201,7 @@ class StudioTests(unittest.TestCase):
         self.assertEqual((infos[last]['icon'],infos[last]['op']['type']),('extrude','extrude'));self.assertEqual(infos[1]['icon'],'sketch')
         vol=lambda:[b for b in w.document.bodies if b.kind=='solid'][0].shape.Volume()
         self.assertAlmostEqual(vol(),1000,2)
-        w.history_edit(last);w._hist_fields['d1'].setValue(8);w._history_edit_apply(last,w._hist_fields);self.wait();self.assertAlmostEqual(vol(),1600,2)
+        w.history_edit(last);w._hist_fields_extrude['d1'].setValue(8);w._history_edit_apply(last,w._hist_fields);self.wait();self.assertAlmostEqual(vol(),1600,2)
         w.history_edit(1);w._hist_fields['edits'][0].setText('30');w._history_edit_apply(1,w._hist_fields);self.wait()
         self.assertAlmostEqual(vol(),2400,2);self.assertEqual(w.document.timeline()[1],last)       # krok sketch zmieniony, wyciągnięcie przeliczone
         w.history_revert();self.assertAlmostEqual(vol(),1600,2)

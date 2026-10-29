@@ -164,6 +164,26 @@ class DocumentTests(unittest.TestCase):
             self.assertAlmostEqual(o.bodies[1].shape.Volume(),125);o.redo();self.assertEqual(len(o.bodies),1);o.goto(0);self.assertFalse(o.bodies)
             o.goto(1);self.assertEqual(o.bodies[0].id,a.id);self.assertFalse(o.dirty and False)
 
+    def test_history_recompute_through_pattern_chamfer_transform_mirror_bool(self):
+        from dataclasses import replace as rep
+        from rccad import history as h
+        a=Body('A',k.box(10,10,10)).prepared();xmin=k.bounds(a.shape).xmin
+        idx=[i for i,e in enumerate(a.shape.Edges()) if abs(e.positionAt(.5).toTuple()[0]-xmin)<1e-6][0]
+        info=lambda r,i:{'label':i,'icon':i,'op':r}
+        r_pat=dict(type='pattern',id=a.id,kind='rect',params=dict(counts=[2,1,1],spacing=[30,0,0]),join=False,out=['b'*32])
+        r_mod=dict(type='mod',id=a.id,kind='chamfer',size=1,verts=[],edges=h.edge_refs(a.shape,[idx]))
+        r_tr=dict(type='transform',id=a.id,mode='move',v=[0,0,5])
+        r_mir=dict(type='mirror',id='b'*32,normal=[0,1,0],origin=[0,-5,0],keep=True,join=False,out='c'*32)
+        r_bool=dict(type='bool',op='union',base=a.id,tools=['c'*32],keep=False)
+        states=[((),{'label':'Początek','icon':'start'}),((a,),{'label':'A','icon':'file'})]
+        for r in (r_pat,r_mod,r_tr,r_mir,r_bool):
+            states.append((h.run_recipe(states[-1][0],r),info(r,r['type'])))
+        wide=rep(a,shape=k.box(20,10,10),mesh=None).prepared()
+        out,failed=h.recompute(states,1,(wide,));self.assertEqual(failed,0)
+        final={b.id:b for b in out[-1][0]};self.assertNotIn('c'*32,final)          # narzędzie połączone i usunięte
+        self.assertGreater(final[a.id].shape.Volume(),2000);self.assertAlmostEqual(final['b'*32].shape.Volume(),2000,2)
+        mid=out[3][0];self.assertLess({b.id:b for b in mid}[a.id].shape.Volume(),2000)     # krok fazowania przeliczony na szerszej bryle
+
     def test_corrupted_project(self):
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'bad.rccadx';path.write_bytes(b'not a zip')

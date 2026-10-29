@@ -1,6 +1,7 @@
 """Historia parametryczna: przepisy operacji (JSON), ich ponowne wykonanie na zmienionym stanie i przeliczanie następnych kroków.
 Czysta logika bez Qt: studio podaje stany (listy Body), a tu wyliczane są nowe stany po edycji któregoś kroku."""
 from __future__ import annotations
+import uuid
 from dataclasses import replace
 import numpy as np
 import cadquery as cq
@@ -98,11 +99,11 @@ def make_tool(src, d1, d2, mode):
     return kernel.extrude_dir(wire, normal, d1, 0.0, mode == 'symmetric')
 
 
-def combine(existing, tools, op, spent=()):
+def combine(existing, tools, op, spent=(), ids=()):
     """Nowe bryły albo operacja logiczna narzędzi z bryłami; użyte szkice wygasają."""
     fade = lambda bodies: [replace(b, visible=False) if b.id in spent else b for b in bodies]
     if op == 'new':
-        return fade([*existing, *[Body('Wyciągnięcie', t).prepared() for t in tools]])
+        return fade([*existing, *[Body('Wyciągnięcie', t, id=(ids[i] if i < len(ids) else uuid.uuid4().hex)).prepared() for i, t in enumerate(tools)]])
     bodies, used = list(existing), False
     for tool in tools:
         box = kernel.bounds(tool)
@@ -127,7 +128,120 @@ def run_extrude(bodies, recipe):
     """Ponownie wykonuje zapisane wyciągnięcie / wycięcie na podanym stanie."""
     mode = recipe.get('dir', 'one')
     tools = [make_tool(resolve_profile(bodies, spec), float(recipe['d1']), float(recipe.get('d2', 0)), mode) for spec in recipe['profiles']]
-    return combine(bodies, tools, recipe['mode'], set(recipe.get('spent', ())))
+    return combine(bodies, tools, recipe['mode'], set(recipe.get('spent', ())), recipe.get('out', ()))
+
+
+def _body(bodies, identifier):
+    body = next((b for b in bodies if b.id == identifier), None)
+    if body is None:
+        raise kernel.CadError('Obiekt użyty w tym kroku już nie istnieje.')
+    return body
+
+
+def _replace(bodies, new):
+    return [new if b.id == new.id else b for b in bodies]
+
+
+def radial(center, pivot, axis, radius_now=None):
+    """(odległość środka obiektu od osi, wersor promieniowy) - jak w panelu Szyk."""
+    axis = np.array(axis, float)
+    axis /= np.linalg.norm(axis)
+    v = np.array(center, float) - np.array(pivot, float)
+    r = v - float(v @ axis) * axis
+    d = float(np.linalg.norm(r))
+    if d > 1e-6:
+        return d, r / d
+    other = np.cross(axis, [0.0, 0.0, 1.0] if abs(axis[2]) < .9 else [1.0, 0.0, 0.0])
+    return 0.0, other / np.linalg.norm(other)
+
+
+def pattern_ops_for(body, recipe):
+    """(kopie, przesunięcie oryginału albo None) dla zapisanych parametrów szyku i bieżącego położenia obiektu."""
+    kind, p = recipe['kind'], recipe['params']
+    if kind == 'circ':
+        center = np.array(kernel.bounds(body.shape).center.toTuple(), float)
+        d0, direction = radial(center, p['pivot'], p['axis'])
+        offset = tuple(float(c) for c in direction * (float(p['radius']) - d0))
+        ops = kernel.pattern_ops('circ', dict(p, offset=offset))
+        return ops, (('t', offset) if max(abs(c) for c in offset) > 1e-9 else None)
+    return kernel.pattern_ops(kind, p), None
+
+
+def run_pattern(bodies, recipe):
+    body = _body(bodies, recipe['id'])
+    ops, moved = pattern_ops_for(body, recipe)
+    source = kernel.apply_op(body.shape, moved) if moved else body.shape
+    copies = [kernel.apply_op(body.shape, op) for op in ops]
+    if recipe.get('join') and body.kind == 'solid':
+        merged = kernel.boolean('union', source, copies) if copies else source
+        return _replace(bodies, body.changed(merged))
+    out = list(recipe.get('out', ()))
+    out += [uuid.uuid4().hex for _ in range(len(copies) - len(out))]
+    made = [Body(f'{body.name} — szyk {i + 1}', sh, body.kind, body.plane, id=out[i]).prepared() for i, sh in enumerate(copies)]
+    current = _replace(bodies, body.changed(source)) if moved else list(bodies)
+    return [*current, *made]
+
+
+def edge_refs(shape, indices):
+    edges = shape.Edges()
+    return [[float(c) for c in edges[i].positionAt(.5).toTuple()] for i in sorted(indices)]
+
+
+def edge_indices(shape, refs):
+    """Krawędzie bryły najbliższe zapisanym środkom (tolerancja proporcjonalna do rozmiaru bryły)."""
+    box = kernel.bounds(shape)
+    tol = max(1e-3, 0.02 * max(box.xlen, box.ylen, box.zlen))
+    mids = np.array([e.positionAt(.5).toTuple() for e in shape.Edges()], float)
+    out = []
+    for ref in refs:
+        d = np.linalg.norm(mids - np.array(ref, float), axis=1)
+        i = int(np.argmin(d))
+        if d[i] > tol:
+            raise kernel.CadError('Krawędź użyta w tym kroku już nie istnieje.')
+        out.append(i)
+    return out
+
+
+def run_mod(bodies, recipe):
+    body = _body(bodies, recipe['id'])
+    if recipe.get('verts'):
+        shape = kernel.blend_vertices(body.shape, [np.array(q, float) for q in recipe['verts']], float(recipe['size']), recipe['kind'])
+    else:
+        shape = kernel.blend(body.shape, set(edge_indices(body.shape, recipe['edges'])), float(recipe['size']), recipe['kind'])
+    return _replace(bodies, body.changed(shape))
+
+
+def run_transform(bodies, recipe):
+    body = _body(bodies, recipe['id'])
+    v = tuple(float(c) for c in recipe['v'])
+    shape = kernel.transform(body.shape, v, (0, 0, 0)) if recipe['mode'] == 'move' else kernel.transform(body.shape, (0, 0, 0), v)
+    return _replace(bodies, body.changed(shape))
+
+
+def run_mirror(bodies, recipe):
+    body = _body(bodies, recipe['id'])
+    shape = kernel.mirror_plane(body.shape, recipe['normal'], recipe['origin'])
+    if recipe.get('join') and body.kind == 'solid':
+        return _replace(bodies, body.changed(kernel.boolean('union', body.shape, [shape])))
+    mirrored = Body(body.name + ' — odbicie', shape, body.kind, body.plane, id=recipe.get('out') or uuid.uuid4().hex).prepared()
+    if recipe.get('keep'):
+        return [*bodies, mirrored]
+    return [mirrored if b.id == body.id else b for b in bodies]
+
+
+def run_bool(bodies, recipe):
+    base = _body(bodies, recipe['base'])
+    tools = [_body(bodies, i) for i in recipe['tools']]
+    result = base.changed(kernel.boolean(recipe['op'], base.shape, [t.shape for t in tools]))
+    gone = set(recipe['tools'])
+    return [result if b.id == base.id else b for b in bodies if recipe.get('keep') or b.id not in gone]
+
+
+RUNNERS = {'extrude': run_extrude, 'pattern': run_pattern, 'mod': run_mod, 'transform': run_transform, 'mirror': run_mirror, 'bool': run_bool}
+
+
+def run_recipe(bodies, recipe):
+    return tuple(RUNNERS[recipe['type']](bodies, recipe))
 
 
 def diff_apply(old_prev, old_cur, new_prev):
@@ -170,9 +284,9 @@ def recompute(states, k, edited_bodies):
         base = out[-1][0]
         recipe = info.get('op')
         result = None
-        if recipe and recipe.get('type') == 'extrude':
+        if recipe and recipe.get('type') in RUNNERS:
             try:
-                result = tuple(run_extrude(base, recipe))
+                result = run_recipe(base, recipe)
             except Exception:
                 result = None
         else:

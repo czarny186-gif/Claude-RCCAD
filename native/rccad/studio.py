@@ -1,6 +1,7 @@
 """Okno „Studio”: układ, grafika i sposób modelowania / szkicowania odtworzone z wersji HTML (natywnie, bez przeglądarki)."""
 from __future__ import annotations
 import math
+import uuid
 from dataclasses import replace
 from pathlib import Path
 import numpy as np
@@ -2322,10 +2323,10 @@ class StudioWindow(QMainWindow):
         existing = list(self.document.bodies)
         spent = self._consumed_sketches(self.ex_profiles)
         recipe = dict(type='extrude', mode=op, dir=self.ex_dir.currentData(), d1=self.ex_value.value(), d2=self.ex_second.value(),
-                      profiles=hist.describe_profiles(self.ex_profiles), spent=sorted(spent))
+                      profiles=hist.describe_profiles(self.ex_profiles), spent=sorted(spent), out=[uuid.uuid4().hex for _ in makers])
 
         def build():
-            return hist.combine(existing, [m() for m in makers], op, spent)
+            return hist.combine(existing, [m() for m in makers], op, spent, recipe['out'])
 
         def apply(bodies):
             self.document.pending_op = recipe
@@ -2400,11 +2401,14 @@ class StudioWindow(QMainWindow):
         op = self.bool_op.currentData()
         keep = self.bool_keep.isChecked()
 
+        recipe = dict(type='bool', op=op, base=base.id, tools=[b.id for b in tools], keep=keep)
+        existing = list(self.document.bodies)
+
         def build():
-            result = base.changed(kernel.boolean(op, base.shape, [b.shape for b in tools]))
-            return [result if b.id == base.id else b for b in self.document.bodies if keep or b.id not in ids]
+            return list(hist.run_bool(existing, recipe))
 
         def apply(new):
+            self.document.pending_op = recipe
             self.document.commit(new)
             self.selected = [base.id]
 
@@ -2624,7 +2628,11 @@ class StudioWindow(QMainWindow):
         body = self.document.get(bid)
         size, kind = self.mod_size.value(), self.mod_kind.currentData()
 
+        recipe = dict(type='mod', id=body.id, kind=kind, size=size, verts=[[float(c) for c in q] for q in points] if verts else [],
+                      edges=[] if verts else hist.edge_refs(body.shape, ids))
+
         def apply(new):
+            self.document.pending_op = recipe
             self.document.commit([new if b.id == body.id else b for b in self.document.bodies])
             self.selected = [body.id]
 
@@ -2710,17 +2718,14 @@ class StudioWindow(QMainWindow):
         normal, origin = self.mirror_frame
         keep, join = self.mir_keep.isChecked(), self.mir_join.isChecked() and body.kind == 'solid'
 
+        recipe = dict(type='mirror', id=body.id, normal=[float(c) for c in normal], origin=[float(c) for c in origin], keep=keep, join=join, out=uuid.uuid4().hex)
+        existing = list(self.document.bodies)
+
         def build():
-            shape = kernel.mirror_plane(body.shape, normal, origin)
-            if join:
-                merged = kernel.boolean('union', body.shape, [shape])
-                return [body.changed(merged) if b.id == body.id else b for b in self.document.bodies]
-            mirrored = Body(body.name + ' — odbicie', shape, body.kind, body.plane).prepared()
-            if keep:
-                return [*self.document.bodies, mirrored]
-            return [mirrored if b.id == body.id else b for b in self.document.bodies]
+            return list(hist.run_mirror(existing, recipe))
 
         def apply(new):
+            self.document.pending_op = recipe
             self.document.commit(new)
             self.selected = [new[-1].id if keep and not join else body.id]
 
@@ -2967,18 +2972,23 @@ class StudioWindow(QMainWindow):
             self.toast('Zwiększ ilość kopii.')
             return
         join = self.pat_join.isChecked() and body.kind == 'solid'
+        kind = self.pat_kind.currentData()
+        if kind == 'rect':
+            params = dict(counts=[int(round(c.value())) for c in self.pat_counts], spacing=[g.value() for g in self.pat_gaps])
+        elif kind == 'circ':
+            params = dict(axis=list(self.AXES[self.pat_axis.currentData()]), pivot=[s.value() for s in self.pat_pivot], count=int(round(self.pat_ccount.value())),
+                          angle=self.pat_angle.value(), radius=self.pat_radius.value())
+        else:
+            params = dict(points=[[float(c) for c in q] for q in np.asarray(self.pat_path, float)], count=int(round(self.pat_lcount.value())),
+                          fit=self.pat_fit.isChecked(), spacing=self.pat_lgap.value())
+        recipe = dict(type='pattern', id=body.id, kind=kind, params=params, join=join, out=[uuid.uuid4().hex for _ in ops])
+        existing = list(self.document.bodies)
 
         def build():
-            source = kernel.apply_op(body.shape, moved) if moved else body.shape
-            copies = [kernel.apply_op(body.shape, op) for op in ops]
-            if join:
-                merged = kernel.boolean('union', source, copies) if copies else source
-                return [body.changed(merged) if b.id == body.id else b for b in self.document.bodies]
-            made = [Body(f'{body.name} — szyk {i + 1}', sh, body.kind, body.plane).prepared() for i, sh in enumerate(copies)]
-            current = [body.changed(source) if (moved and b.id == body.id) else b for b in self.document.bodies]
-            return [*current, *made]
+            return list(hist.run_pattern(existing, recipe))
 
         def apply(new):
+            self.document.pending_op = recipe
             self.document.commit(new)
             self.selected = []
 
@@ -3131,6 +3141,7 @@ class StudioWindow(QMainWindow):
 
         def apply(body):
             self.view.clear_body_matrices()
+            self.document.pending_op = dict(type='transform', id=target.id, mode=mode, v=[float(c) for c in v])
             self.document.commit([body if b.id == body.id else b for b in self.document.bodies])
             self.selected = [body.id]
 
@@ -3230,16 +3241,8 @@ class StudioWindow(QMainWindow):
         title = QLabel(f"Edycja kroku {index}: {info.get('label', '')}")
         title.setObjectName('ptitle')
         lay.addWidget(title)
-        if recipe and recipe.get('type') == 'extrude':
-            op = ui.Segmented([('Nowa', 'new', 'new'), ('Połącz', 'join', 'join'), ('Wytnij', 'cut', 'cut'), ('Wspólna', 'intersect', 'intersect')], 28)
-            op.setCurrentIndex(['new', 'join', 'cut', 'intersect'].index(recipe['mode']))
-            direction = ui.Segmented([('Jedna strona', 'one', 'one'), ('Symetrycznie', 'symmetric', 'sym'), ('Dwie strony', 'two', 'two')], 28)
-            direction.setCurrentIndex(['one', 'symmetric', 'two'].index(recipe.get('dir', 'one')))
-            d1, d2 = _spin(float(recipe['d1']), -1e5, 1e5, 2, 1), _spin(float(recipe.get('d2', 0)), 0, 1e5, 2, 1)
-            for caption, widget in (('Operacja', op), ('Kierunek', direction), ('Odległość (mm)', d1), ('Druga strona (mm)', d2)):
-                lay.addWidget(_label(caption, 'psub'))
-                lay.addWidget(widget)
-            fields = dict(kind='extrude', op=op, dir=direction, d1=d1, d2=d2)
+        if recipe and recipe.get('type') in hist.RUNNERS:
+            fields = dict(kind='recipe', collect=self._recipe_form(recipe, lay))
         else:
             added = [b for b in bodies if b.kind == 'sketch' and b.meta and b.meta.get('tool') in sm.EDITABLE and b.id not in {x.id for x in states[index - 1][0]}]
             if not added:
@@ -3267,16 +3270,100 @@ class StudioWindow(QMainWindow):
         self.hist_edit.show()
         self.hist_edit.raise_()
 
+    def _recipe_form(self, recipe, lay):
+        """Pola edycji parametrów kroku dla danego typu operacji; zwraca funkcję zbierającą nowy przepis."""
+        def field(caption, widget):
+            lay.addWidget(_label(caption, 'psub'))
+            lay.addWidget(widget)
+            return widget
+
+        kind = recipe['type']
+        if kind == 'extrude':
+            op = ui.Segmented([('Nowa', 'new', 'new'), ('Połącz', 'join', 'join'), ('Wytnij', 'cut', 'cut'), ('Wspólna', 'intersect', 'intersect')], 28)
+            op.setCurrentIndex(['new', 'join', 'cut', 'intersect'].index(recipe['mode']))
+            direction = ui.Segmented([('Jedna strona', 'one', 'one'), ('Symetrycznie', 'symmetric', 'sym'), ('Dwie strony', 'two', 'two')], 28)
+            direction.setCurrentIndex(['one', 'symmetric', 'two'].index(recipe.get('dir', 'one')))
+            d1, d2 = _spin(float(recipe['d1']), -1e5, 1e5, 2, 1), _spin(float(recipe.get('d2', 0)), 0, 1e5, 2, 1)
+            for caption, widget in (('Operacja', op), ('Kierunek', direction), ('Odległość (mm)', d1), ('Druga strona (mm)', d2)):
+                field(caption, widget)
+            self._hist_fields_extrude = dict(d1=d1, d2=d2, op=op, dir=direction)
+            return lambda: dict(recipe, mode=op.currentData(), dir=direction.currentData(), d1=d1.value(), d2=d2.value())
+        if kind == 'transform':
+            spins = [_spin(float(c), -1e6, 1e6, 3, 1) for c in recipe['v']]
+            for caption, spin in zip(('X' if recipe['mode'] == 'move' else 'Obrót wokół X (°)', 'Y' if recipe['mode'] == 'move' else 'Obrót wokół Y (°)',
+                                      'Z' if recipe['mode'] == 'move' else 'Obrót wokół Z (°)'), spins):
+                field(caption + (' (mm)' if recipe['mode'] == 'move' else ''), spin)
+            self._hist_spins = spins
+            return lambda: dict(recipe, v=[x.value() for x in spins])
+        if kind == 'mod':
+            mk = ui.Segmented([('Zaokrąglij', 'fillet', 'fillet'), ('Fazuj', 'chamfer', 'chamfer')], 28)
+            mk.setCurrentIndex(['fillet', 'chamfer'].index(recipe['kind']))
+            size = _spin(float(recipe['size']), .01, 1e5, 2, .5)
+            field('Operacja', mk)
+            field('Promień / odległość (mm)', size)
+            self._hist_spins = [size]
+            return lambda: dict(recipe, kind=mk.currentData(), size=size.value())
+        if kind == 'mirror':
+            keep, join = QCheckBox('Zachowaj oryginał'), QCheckBox('Połącz z oryginałem (bryły)')
+            keep.setChecked(bool(recipe.get('keep')))
+            join.setChecked(bool(recipe.get('join')))
+            lay.addWidget(keep)
+            lay.addWidget(join)
+            return lambda: dict(recipe, keep=keep.isChecked(), join=join.isChecked())
+        if kind == 'bool':
+            op = ui.Segmented([('Suma', 'union', 'union'), ('Różnica', 'subtract', 'subtract'), ('Część wspólna', 'intersect', 'common')], 28)
+            op.setCurrentIndex(['union', 'subtract', 'intersect'].index(recipe['op']))
+            keep = QCheckBox('Zachowaj bryły-narzędzia')
+            keep.setChecked(bool(recipe.get('keep')))
+            field('Operacja', op)
+            lay.addWidget(keep)
+            return lambda: dict(recipe, op=op.currentData(), keep=keep.isChecked())
+        if kind == 'pattern':
+            p, sp = dict(recipe['params']), []
+            if recipe['kind'] == 'rect':
+                counts = [_spin(float(c), 1, 200, 0, 1) for c in p['counts']]
+                gaps = [_spin(float(c), -1e5, 1e5, 2, 1) for c in p['spacing']]
+                for axis, c, g in zip('XYZ', counts, gaps):
+                    field(f'Ilość {axis}', c)
+                    field(f'Odstęp {axis} (mm)', g)
+                sp = counts + gaps
+                params = lambda: dict(p, counts=[int(round(c.value())) for c in counts], spacing=[g.value() for g in gaps])
+            elif recipe['kind'] == 'circ':
+                count, angle, radius = _spin(float(p['count']), 1, 400, 0, 1), _spin(float(p['angle']), -360, 360, 1, 5), _spin(float(p['radius']), 0, 1e5, 2, 1)
+                pivot = [_spin(float(c), -1e6, 1e6, 2, 1) for c in p['pivot']]
+                field('Ilość kopii', count)
+                field('Kąt łączny (°)', angle)
+                field('Odległość od środka (mm)', radius)
+                for axis, c in zip('XYZ', pivot):
+                    field(f'Środek {axis} (mm)', c)
+                sp = [count, angle, radius, *pivot]
+                params = lambda: dict(p, count=int(round(count.value())), angle=angle.value(), radius=radius.value(), pivot=[c.value() for c in pivot])
+            else:
+                count, spacing = _spin(float(p['count']), 1, 400, 0, 1), _spin(float(p['spacing']), .01, 1e5, 2, 1)
+                fit = QCheckBox('Rozłóż równo na całej ścieżce')
+                fit.setChecked(bool(p.get('fit', True)))
+                field('Ilość kopii', count)
+                lay.addWidget(fit)
+                field('Odstęp (mm)', spacing)
+                sp = [count, spacing]
+                params = lambda: dict(p, count=int(round(count.value())), fit=fit.isChecked(), spacing=spacing.value())
+            join = QCheckBox('Połącz kopie w jedną bryłę')
+            join.setChecked(bool(recipe.get('join')))
+            lay.addWidget(join)
+            self._hist_spins = sp
+            return lambda: dict(recipe, params=params(), join=join.isChecked())
+        raise kernel.CadError('Ten krok nie ma parametrów do edycji.')
+
     def _history_edit_apply(self, index, fields):
         states = self.document.states()
         bodies, info = states[index]
         try:
-            if fields['kind'] == 'extrude':
-                recipe = dict(info['op'], mode=fields['op'].currentData(), dir=fields['dir'].currentData(), d1=fields['d1'].value(), d2=fields['d2'].value())
+            if fields['kind'] == 'recipe':
+                recipe = fields['collect']()
                 new_info = dict(info, op=recipe)
 
                 def first():
-                    return tuple(hist.run_extrude(states[index - 1][0], recipe))
+                    return hist.run_recipe(states[index - 1][0], recipe)
             else:
                 target = fields['target']
                 values = []
