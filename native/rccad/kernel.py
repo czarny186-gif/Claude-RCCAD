@@ -518,24 +518,93 @@ def circle_tangent2(plane, line1, line2, hint):
     return wp(plane).center(best[1], best[2]).circle(best[3]).wire().val()
 
 
-def text_shape(plane, text, u, v, size=10.0, font="Arial", bold=False, halign="left", angle=0.0):
-    """Kontury liter (zewnętrzne druty ścian leżących na płaszczyźnie szkicu); wymaga czcionki systemowej."""
+_STYLE_WORDS = {"bold", "italic", "oblique", "regular", "normal"}
+
+
+def font_file(family, bold=False, italic=False):
+    """Ścieżka pliku czcionki zainstalowanej w Windows (rejestr Fonts) dla rodziny i stylu; None, gdy brak / inny system."""
+    import sys
+    if sys.platform != "win32" or not family:
+        return None
+    try:
+        import os
+        import winreg
+        wanted = ({"bold"} if bold else set()) | ({"italic"} if italic else set())
+        best = None
+        for root in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+            try:
+                key = winreg.OpenKey(root, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts")
+            except OSError:
+                continue
+            i = 0
+            while True:
+                try:
+                    name, value, _ = winreg.EnumValue(key, i)
+                except OSError:
+                    break
+                i += 1
+                base = name.rsplit(" (", 1)[0]
+                for part in base.split(" & "):
+                    words = part.split()
+                    low = [w.lower() for w in words]
+                    k = len(words)
+                    while k > 0 and low[k - 1] in _STYLE_WORDS:
+                        k -= 1
+                    if " ".join(words[:k]).lower() != family.lower():
+                        continue
+                    style = {w for w in low[k:] if w in _STYLE_WORDS} - {"regular", "normal"}
+                    style = {"italic" if w == "oblique" else w for w in style}
+                    path = value if os.path.isabs(value) else os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts", value)
+                    if not os.path.exists(path):
+                        alt = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "Windows", "Fonts", value)
+                        path = alt if os.path.exists(alt) else None
+                    if path is None:
+                        continue
+                    score = (style == wanted, -len(style ^ wanted), not path.lower().endswith(".ttc"))
+                    if best is None or score > best[0]:
+                        best = (score, path)
+        return best[1] if best else None
+    except Exception:
+        return None
+
+
+_TEXT_CACHE = {}
+
+
+def text_shape(plane, text, u, v, size=10.0, font="Arial", bold=False, halign="left", angle=0.0, italic=False):
+    """Kontury liter na płaszczyźnie szkicu: zewnętrzne i wewnętrzne (otwory w a, e, o, ą…) jako osobne druty.
+    Czcionka: rodzina zainstalowana w systemie (w Windows z pliku czcionki, więc działają polskie znaki)."""
     text = str(text).strip()
     if not text:
         raise CadError("Wpisz treść tekstu.")
-    kind = "bold" if bold else "regular"
-    solid = wp(plane).center(float(u), float(v)).text(text, float(size), 0.2, combine=False, font=font, kind=kind,
-                                                      halign=halign, valign="bottom").val()
-    fr = frame_of(plane)
-    n0, o0 = np.array(fr.normal), np.array(fr.origin)
-    wires = [f.outerWire() for f in (solid.Faces() if solid is not None else [])
-             if abs(float((np.array(f.Center().toTuple()) - o0) @ n0)) < 1e-5 and abs(abs(float(np.array(f.normalAt().toTuple()) @ n0)) - 1) < 1e-3]
-    if not wires:
-        raise CadError("Nie udało się utworzyć tekstu (brak czcionki).")
-    if abs(float(angle)) > 1e-9:
-        pivot = cq.Vector(*to_world(plane, u, v))
-        wires = [w.rotate(pivot, pivot + cq.Vector(*fr.normal), float(angle)) for w in wires]
-    return wires
+    key = (frame_of(plane), text, round(float(size), 4), font, bool(bold), bool(italic), halign, round(float(angle), 4))
+    cached = _TEXT_CACHE.get(key)
+    if cached is None:
+        kind = "bold" if bold else ("italic" if italic else "regular")
+        fr = frame_of(plane)
+        n0, o0 = np.array(fr.normal), np.array(fr.origin)
+        wires = []
+        for name, path in ((font, font_file(font, bold, italic)), ("Arial", font_file("Arial", bold, italic)), ("Sans", None)):
+            try:
+                solid = wp(plane).text(text, float(size), 0.2, combine=False, font=name, fontPath=path, kind=kind,
+                                       halign=halign, valign="bottom").val()
+            except Exception:
+                continue
+            wires = [w for f in (solid.Faces() if solid is not None else [])
+                     if abs(float((np.array(f.Center().toTuple()) - o0) @ n0)) < 1e-5 and abs(abs(float(np.array(f.normalAt().toTuple()) @ n0)) - 1) < 1e-3
+                     for w in f.Wires()]
+            if wires:
+                break
+        if not wires:
+            raise CadError("Nie udało się utworzyć tekstu (brak czcionki lub znaków w czcionce).")
+        if abs(float(angle)) > 1e-9:
+            pivot = cq.Vector(*o0)
+            wires = [w.rotate(pivot, pivot + cq.Vector(*n0), float(angle)) for w in wires]
+        if len(_TEXT_CACHE) > 24:
+            _TEXT_CACHE.clear()
+        cached = _TEXT_CACHE[key] = wires
+    shift = cq.Vector(*(np.array(to_world(plane, float(u), float(v)), float) - np.array(to_world(plane, 0.0, 0.0), float)))
+    return [w.translate(shift) for w in cached]
 
 
 def profile_normal(shape, reference):

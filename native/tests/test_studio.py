@@ -208,6 +208,16 @@ class StudioTests(unittest.TestCase):
         except Exception:self.skipTest('brak czcionki w środowisku')
         self.sketch('text',(0,0));self.assertGreaterEqual(len(self.w.document.bodies),1)
 
+    def test_text_keeps_letter_holes_and_previews(self):
+        try:k.text_shape('XY','O',0,0,10)
+        except Exception:self.skipTest('brak czcionki w środowisku')
+        self.assertGreaterEqual(len(k.text_shape('XY','O',0,0,10)),2)
+        a=k.text_shape('XY','Ab',0,0,10)[0].Center().toTuple();b=k.text_shape('XY','Ab',30,5,10)[0].Center().toTuple()
+        self.assertAlmostEqual(b[0]-a[0],30,3);self.assertAlmostEqual(b[1]-a[1],5,3)
+        w=self.w;w.set_mode('plane');w.plane_picked('XY');w.choose_tool('text');w.sketch_moved('XY',12,3);self.assertTrue(w.view.preview_items)
+        before=len(w.document.bodies);w.text_u.setValue(5);w.text_v.setValue(5);w.place_text(5,5);self.wait()
+        self.assertGreater(len(w.document.bodies),before)
+
     def test_typed_dimensions_are_live(self):
         w=self.w;w.set_mode('plane');w.plane_picked('XY');w.choose_tool('rect');w.sketch_clicked('XY',0,0)
         self.assertTrue(w.open_dim_input('3'));w.dim_edits[0].setText('30');w.dim_edits[1].setText('10')

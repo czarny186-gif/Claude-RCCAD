@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 from PySide6.QtCore import QEvent, QObject, QPoint, QRunnable, QSize, Qt, QThreadPool, QTimer, Signal
 from PySide6.QtGui import QCursor, QIcon, QKeySequence, QMatrix4x4, QShortcut
-from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFontComboBox, QDoubleSpinBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
                                QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QToolButton, QVBoxLayout, QWidget)
 from . import kernel
 from . import shell_ui as ui
@@ -581,17 +581,52 @@ class StudioWindow(QMainWindow):
         row.addLayout(col1)
         row.addLayout(col2)
         lay.addLayout(row)
-        self.text_font = QComboBox()
-        for label, key in (('Sans (DejaVu)', 'sans'), ('Sans pogrubiona', 'bold'), ('Szeryfowa', 'serif')):
-            self.text_font.addItem(label, key)
-        self._field(lay, 'Czcionka', self.text_font)
+        self.text_font = QFontComboBox()
+        self.text_font.setEditable(False)
+        self.text_font.setMaxVisibleItems(18)
+        for name in ('Arial', 'Segoe UI', 'DejaVu Sans'):
+            if name in [self.text_font.itemText(i) for i in range(self.text_font.count())]:
+                self.text_font.setCurrentText(name)
+                break
+        self._field(lay, 'Czcionka (zainstalowane w systemie)', self.text_font)
+        style_row = QHBoxLayout()
+        self.text_bold = QCheckBox('Pogrubiona')
+        self.text_italic = QCheckBox('Pochylona')
+        style_row.addWidget(self.text_bold)
+        style_row.addWidget(self.text_italic)
+        lay.addLayout(style_row)
         self.text_align = QComboBox()
         for label, key in (('Do lewej', 'left'), ('Do środka', 'center'), ('Do prawej', 'right')):
             self.text_align.addItem(label, key)
         self._field(lay, 'Wyrównanie względem klikniętego punktu', self.text_align)
+        prow = QHBoxLayout()
+        pc1, pc2 = QVBoxLayout(), QVBoxLayout()
+        self.text_u = _spin(0, -1e5, 1e5, 2, 1)
+        self.text_v = _spin(0, -1e5, 1e5, 2, 1)
+        pc1.addWidget(_label('Pozycja X (mm)'))
+        pc1.addWidget(self.text_u)
+        pc2.addWidget(_label('Pozycja Y (mm)'))
+        pc2.addWidget(self.text_v)
+        prow.addLayout(pc1)
+        prow.addLayout(pc2)
+        lay.addLayout(prow)
+        place = QPushButton('Wstaw w podanej pozycji')
+        place.clicked.connect(lambda _=False: self.place_text(self.text_u.value(), self.text_v.value()))
+        lay.addWidget(place)
+        self.text_status = _label('Podgląd podąża za kursorem; kliknij, aby wstawić. Kliknięcie ściany bryły ustawia tam płaszczyznę szkicu.')
+        lay.addWidget(self.text_status)
         close = QPushButton('Zamknij narzędzie')
         close.clicked.connect(lambda _=False: self.choose_tool('rect'))
         lay.addWidget(close)
+        self._text_timer = QTimer(self)
+        self._text_timer.setSingleShot(True)
+        self._text_timer.setInterval(120)
+        self._text_timer.timeout.connect(self.text_preview)
+        for sig in (self.text_edit.textChanged, self.text_size.valueChanged, self.text_angle.valueChanged, self.text_font.currentIndexChanged,
+                    self.text_bold.toggled, self.text_italic.toggled, self.text_align.currentIndexChanged):
+            sig.connect(lambda *_: self._text_timer.start())
+        for spin in (self.text_u, self.text_v):
+            spin.valueChanged.connect(lambda *_: self._text_timer.start())
 
         self.panels = (self.ex_panel, self.ex_bar, self.bool_panel, self.mod_panel, self.mir_panel, self.text_panel)
         for p in self.panels:
@@ -838,6 +873,8 @@ class StudioWindow(QMainWindow):
         self.points = []
         self.tangent_lines = []
         self.text_panel.setVisible(name == 'text')
+        if name == 'text':
+            self._text_timer.start()
         self.dim.hide()
         self.dim_panel.hide()
         self.view.set_preview_mesh(None)
@@ -948,6 +985,37 @@ class StudioWindow(QMainWindow):
             mesh = None
         self.view.set_preview_mesh(mesh, line_color=SKETCH_ORANGE, width=2, dashed=True)
 
+    def _text_shapes(self, u, v):
+        return kernel.text_shape(self.sketch_plane, self.text_edit.toPlainText().replace('\n', ' '), u, v, self.text_size.value(),
+                                 font=self.text_font.currentFont().family(), bold=self.text_bold.isChecked(), italic=self.text_italic.isChecked(),
+                                 halign=self.text_align.currentData(), angle=self.text_angle.value())
+
+    def place_text(self, u, v):
+        if self.mode != 'sketch' or self.busy:
+            return
+        try:
+            shapes = self._text_shapes(u, v)
+        except kernel.CadError as exc:
+            self.toast(str(exc))
+            return
+        self.view.set_preview_mesh(None)
+        self.create_sketch(shapes, 'Tekst')
+
+    def text_preview(self):
+        """Pomarańczowy podgląd napisu w miejscu kursora (albo we wpisanej pozycji) - widać rozmiar, obrót i czcionkę przed wstawieniem."""
+        if self.mode != 'sketch' or self.tool != 'text' or self.busy:
+            return
+        uv = getattr(self, 'last_uv', None)
+        if uv is None:
+            uv = (self.text_u.value(), self.text_v.value())
+        try:
+            shapes = self._text_shapes(*uv)
+            mesh = _merge_meshes([kernel.display_mesh(w) for w in shapes])
+            self.view.set_preview_mesh(mesh, line_color=SKETCH_ORANGE, width=2.2)
+        except Exception as exc:
+            self.view.set_preview_mesh(None)
+            self.text_status.setText(str(exc))
+
     def sketch_moved(self, plane, u, v):
         if self.mode != 'sketch' or self.busy:
             return
@@ -964,6 +1032,15 @@ class StudioWindow(QMainWindow):
                     self.view.set_preview_mesh(kernel.display_mesh(shape), line_color=SKETCH_ORANGE, width=2, dashed=True)
                 except kernel.CadError:
                     self.view.set_preview_mesh(None)
+            return
+        if self.tool == 'text':
+            self.text_u.blockSignals(True)
+            self.text_v.blockSignals(True)
+            self.text_u.setValue(round(u, 2))
+            self.text_v.setValue(round(v, 2))
+            self.text_u.blockSignals(False)
+            self.text_v.blockSignals(False)
+            self.text_preview()
             return
         if not self.points or self.dim_panel.isVisible():
             return          # wartości wpisane z klawiatury mają pierwszeństwo przed kursorem
@@ -1027,11 +1104,7 @@ class StudioWindow(QMainWindow):
                 self.create_sketch([shape])
                 return
             if t == 'text':
-                font = self.text_font.currentData()
-                shapes = kernel.text_shape(self.sketch_plane, self.text_edit.toPlainText().replace('\n', ' '), u, v, self.text_size.value(),
-                                           font='Serif' if font == 'serif' else 'Sans', bold=font == 'bold',
-                                           halign=self.text_align.currentData(), angle=self.text_angle.value())
-                self.create_sketch(shapes, 'Tekst')
+                self.place_text(u, v)
                 return
         except kernel.CadError as exc:
             self.toast(str(exc))
@@ -2385,7 +2458,7 @@ class StudioWindow(QMainWindow):
 
     def sketch_hover_wanted(self):
         """Kursor ze znacznikiem i przyciąganiem działa dopiero po wybraniu miejsca rysowania (pierwszy klik) — bez ciągłego liczenia."""
-        return bool(self.points) or self.tool == 'trim' or (self.tool == 'circleTangent2' and len(self.tangent_lines) == 2)
+        return bool(self.points) or self.tool in ('trim', 'text') or (self.tool == 'circleTangent2' and len(self.tangent_lines) == 2)
 
     def context_menu(self, x, y):
         if self.busy:
