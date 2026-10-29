@@ -35,7 +35,7 @@ HINTS = {
     'point': ['Kliknij miejsce punktu.'],
     'construction': ['Kliknij początek linii konstrukcyjnej.', 'Kliknij koniec.'],
     'measure': ['Kliknij pierwszy punkt pomiaru.', 'Kliknij drugi punkt.'],
-    'text': ['Wpisz treść w panelu i kliknij miejsce na szkicu.'],
+    'text': ['Wybierz powierzchnię, przeciągnij obszar napisu i wpisz treść.'],
     'trim': ['Nożyczki: kliknij fragment szkicu, który ma zniknąć.'],
     'line': ['Kliknij początek linii.', 'Kliknij kolejny punkt. Enter lub ponowne kliknięcie kończy, kliknięcie w pierwszy punkt zamyka obrys.'],
 }
@@ -564,23 +564,20 @@ class StudioWindow(QMainWindow):
         self.mir_keep.toggled.connect(lambda *_: self._timers['mirror'].start())
         self.mir_join.toggled.connect(lambda *_: self._timers['mirror'].start())
 
-        # --- tekst ---
-        self.text_panel, lay = self._panel(300, 'Tekst', 'sketch', 'Kontury liter jako profile')
-        self.text_edit = QPlainTextEdit('Tekst')
-        self.text_edit.setFixedHeight(54)
-        self._field(lay, 'Treść', self.text_edit)
-        row = QHBoxLayout()
-        row.setSpacing(8)
-        col1, col2 = QVBoxLayout(), QVBoxLayout()
-        self.text_size = _spin(10, .1, 1000, 2, 1)
-        self.text_angle = _spin(0, -360, 360, 1, 5)
-        col1.addWidget(_label('Wysokość liter (mm)'))
-        col1.addWidget(self.text_size)
-        col2.addWidget(_label('Obrót (°)'))
-        col2.addWidget(self.text_angle)
-        row.addLayout(col1)
-        row.addLayout(col2)
-        lay.addLayout(row)
+        # --- tekst: powierzchnia -> obszar -> treść (jak kreator odbicia lustrzanego) ---
+        self.txt = None
+        self._text_ext = {}
+        self.text_panel, lay = self._panel(312, 'Tekst', 'sketch', 'Powierzchnia → obszar → treść')
+        self.txt_step1 = ui.StepRow(1, 'sym', 'Powierzchnia')
+        self.txt_step2 = ui.StepRow(2, 'sketch', 'Obszar napisu')
+        lay.addWidget(self.txt_step1)
+        lay.addWidget(self.txt_step2)
+        self.text_form = QWidget()
+        form = QVBoxLayout(self.text_form)
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setSpacing(9)
+        self.text_edit = QLineEdit('Tekst')
+        self._field(form, '3. Treść', self.text_edit)
         self.text_font = QFontComboBox()
         self.text_font.setEditable(False)
         self.text_font.setMaxVisibleItems(18)
@@ -588,45 +585,39 @@ class StudioWindow(QMainWindow):
             if name in [self.text_font.itemText(i) for i in range(self.text_font.count())]:
                 self.text_font.setCurrentText(name)
                 break
-        self._field(lay, 'Czcionka (zainstalowane w systemie)', self.text_font)
+        self._field(form, 'Czcionka (zainstalowane w systemie)', self.text_font)
         style_row = QHBoxLayout()
         self.text_bold = QCheckBox('Pogrubiona')
         self.text_italic = QCheckBox('Pochylona')
-        style_row.addWidget(self.text_bold)
-        style_row.addWidget(self.text_italic)
-        lay.addLayout(style_row)
-        self.text_align = QComboBox()
-        for label, key in (('Do lewej', 'left'), ('Do środka', 'center'), ('Do prawej', 'right')):
-            self.text_align.addItem(label, key)
-        self._field(lay, 'Wyrównanie względem klikniętego punktu', self.text_align)
-        prow = QHBoxLayout()
-        pc1, pc2 = QVBoxLayout(), QVBoxLayout()
-        self.text_u = _spin(0, -1e5, 1e5, 2, 1)
-        self.text_v = _spin(0, -1e5, 1e5, 2, 1)
-        pc1.addWidget(_label('Pozycja X (mm)'))
-        pc1.addWidget(self.text_u)
-        pc2.addWidget(_label('Pozycja Y (mm)'))
-        pc2.addWidget(self.text_v)
-        prow.addLayout(pc1)
-        prow.addLayout(pc2)
-        lay.addLayout(prow)
-        place = QPushButton('Wstaw w podanej pozycji')
-        place.clicked.connect(lambda _=False: self.place_text(self.text_u.value(), self.text_v.value()))
-        lay.addWidget(place)
-        self.text_status = _label('Podgląd podąża za kursorem; kliknij, aby wstawić. Kliknięcie ściany bryły ustawia tam płaszczyznę szkicu.')
+        self.text_caps = QCheckBox('WERSALIKI')
+        for box in (self.text_bold, self.text_italic, self.text_caps):
+            style_row.addWidget(box)
+        form.addLayout(style_row)
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        col1, col2 = QVBoxLayout(), QVBoxLayout()
+        self.text_size = _spin(10, .1, 5000, 2, 1)
+        self.text_angle = _spin(0, -360, 360, 1, 5)
+        col1.addWidget(_label('Wysokość liter (mm)'))
+        col1.addWidget(self.text_size)
+        col2.addWidget(_label('Obrót (°)'))
+        col2.addWidget(self.text_angle)
+        row.addLayout(col1)
+        row.addLayout(col2)
+        form.addLayout(row)
+        lay.addWidget(self.text_form)
+        self.text_status = _label('', 'status')
         lay.addWidget(self.text_status)
-        close = QPushButton('Zamknij narzędzie')
-        close.clicked.connect(lambda _=False: self.choose_tool('rect'))
-        lay.addWidget(close)
-        self._text_timer = QTimer(self)
-        self._text_timer.setSingleShot(True)
-        self._text_timer.setInterval(120)
-        self._text_timer.timeout.connect(self.text_preview)
-        for sig in (self.text_edit.textChanged, self.text_size.valueChanged, self.text_angle.valueChanged, self.text_font.currentIndexChanged,
-                    self.text_bold.toggled, self.text_italic.toggled, self.text_align.currentIndexChanged):
-            sig.connect(lambda *_: self._text_timer.start())
-        for spin in (self.text_u, self.text_v):
-            spin.valueChanged.connect(lambda *_: self._text_timer.start())
+        self._buttons(lay, 'Zatwierdź (Enter)', 'Anuluj', self.apply_text, self.text_cancel)
+        again = QPushButton('Zmień powierzchnię')
+        again.clicked.connect(lambda _=False: self._text_set_stage('surface'))
+        lay.addWidget(again)
+        self.text_form.setEnabled(False)
+        for sig in (self.text_edit.textChanged, self.text_font.currentIndexChanged, self.text_bold.toggled, self.text_italic.toggled,
+                    self.text_caps.toggled):
+            sig.connect(lambda *_: self._text_refresh())
+        self.text_size.valueChanged.connect(lambda *_: self._text_spin_changed())
+        self.text_angle.valueChanged.connect(lambda *_: self._text_spin_changed())
 
         self.panels = (self.ex_panel, self.ex_bar, self.bool_panel, self.mod_panel, self.mir_panel, self.text_panel)
         for p in self.panels:
@@ -691,6 +682,8 @@ class StudioWindow(QMainWindow):
         if event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Return, Qt.Key_Enter) and self.isActiveWindow() and not self.busy:
             action = {'extrude': self.apply_extrude, 'bool': self.apply_bool, 'mod': self.apply_mod, 'mirror': self.apply_mirror,
                       'move': self.apply_transform, 'rotate': self.apply_transform}.get(self.mode)
+            if action is None and self.mode == 'sketch' and self.tool == 'text' and self.txt and self.txt['stage'] == 'edit':
+                action = self.apply_text
             focus = QApplication.focusWidget()
             if action and not isinstance(focus, QPlainTextEdit) and (focus is None or self.isAncestorOf(focus) or focus is self):
                 action()
@@ -767,6 +760,8 @@ class StudioWindow(QMainWindow):
         if self.busy:
             return
         self.override = {}
+        self.txt = None
+        self.view.sketch_box = None
         self.view.clear_body_matrices()
         self.cancel_previews()
         self.view.snapper = None
@@ -874,7 +869,9 @@ class StudioWindow(QMainWindow):
         self.tangent_lines = []
         self.text_panel.setVisible(name == 'text')
         if name == 'text':
-            self._text_timer.start()
+            self._text_begin()
+        else:
+            self._text_end()
         self.dim.hide()
         self.dim_panel.hide()
         self.view.set_preview_mesh(None)
@@ -985,36 +982,246 @@ class StudioWindow(QMainWindow):
             mesh = None
         self.view.set_preview_mesh(mesh, line_color=SKETCH_ORANGE, width=2, dashed=True)
 
-    def _text_shapes(self, u, v):
-        return kernel.text_shape(self.sketch_plane, self.text_edit.toPlainText().replace('\n', ' '), u, v, self.text_size.value(),
-                                 font=self.text_font.currentFont().family(), bold=self.text_bold.isChecked(), italic=self.text_italic.isChecked(),
-                                 halign=self.text_align.currentData(), angle=self.text_angle.value())
+    # ---------- tekst: kreator (powierzchnia -> obszar -> treść, uchwyty skalowania i obrotu) ----------
+    def _text_begin(self):
+        """Start narzędzia Tekst: zawsze najpierw wybór powierzchni (po jej wskazaniu kreator przechodzi do obszaru)."""
+        keep = getattr(self, '_text_plane_keep', False)
+        self._text_plane_keep = False
+        self.txt = dict(stage='area' if keep else 'surface', drag=None, anchor=(0.0, 0.0), size=self.text_size.value(), angle=0.0)
+        self._text_ui()
 
-    def place_text(self, u, v):
-        if self.mode != 'sketch' or self.busy:
+    def _text_end(self):
+        stage = (self.txt or {}).get('stage')
+        self.txt = None
+        self.view.sketch_box = None
+        if stage == 'surface' and self.mode == 'sketch':
+            self.view.plane_pick = False
+            self.view.show_planes(False)
+            self.view.setCursor(Qt.ArrowCursor)
+        self.text_form.setEnabled(False)
+        self.view.update()
+
+    def _text_set_stage(self, stage):
+        if self.txt is None:
+            return
+        self.txt['stage'] = stage
+        self.txt['drag'] = None
+        self.view.set_preview_mesh(None)
+        self._text_ui()
+
+    def _text_ui(self):
+        t = self.txt
+        if t is None:
+            return
+        stage = t['stage']
+        self.view.sketch_box = None
+        self._hover_key = None
+        self.view.plane_pick = stage == 'surface'
+        self.view.show_planes(stage == 'surface')
+        self.view.setCursor(Qt.PointingHandCursor if stage == 'surface' else Qt.CrossCursor)
+        label = self._plane_label()
+        if stage == 'surface':
+            self.txt_step1.set_state('active', 'Kliknij płaszczyznę lub ścianę bryły')
+            self.txt_step2.set_state('pending', '')
+        elif stage == 'area':
+            self.txt_step1.set_state('done', f'Płaszczyzna {label}')
+            self.txt_step2.set_state('active', 'Przytrzymaj lewy przycisk i przeciągnij')
+        else:
+            self.txt_step1.set_state('done', f'Płaszczyzna {label}')
+            self.txt_step2.set_state('done', 'Przeciągnij uchwyty, aby zmienić')
+        self.text_form.setEnabled(stage == 'edit')
+        self.text_status.setText({'surface': 'Wybierz, gdzie ma być napis.', 'area': 'Zaznacz prostokątny obszar napisu na powierzchni.',
+                                  'edit': 'Wpisz treść. Niebieski uchwyt skaluje, czerwony punkt obraca, wnętrze ramki przesuwa. Enter zatwierdza.'}[stage])
+        if stage == 'edit':
+            self._text_refresh()
+            self.text_edit.setFocus()
+            self.text_edit.selectAll()
+        self.text_panel.adjustSize()
+        self.view.update()
+
+    def _text_params(self):
+        text = self.text_edit.text().replace('\n', ' ')
+        return dict(text=text.upper() if self.text_caps.isChecked() else text, font=self.text_font.currentFont().family(),
+                    bold=self.text_bold.isChecked(), italic=self.text_italic.isChecked())
+
+    def _text_shapes(self):
+        t, q = self.txt, self._text_params()
+        return kernel.text_shape(self.sketch_plane, q['text'], *t['anchor'], size=t['size'], font=q['font'], bold=q['bold'], italic=q['italic'], angle=t['angle'])
+
+    def _text_extent(self):
+        q = self._text_params()
+        key = (self._plane_key(self.sketch_plane), q['text'], q['font'], q['bold'], q['italic'])
+        if key not in self._text_ext:
+            if len(self._text_ext) > 40:
+                self._text_ext.clear()
+            self._text_ext[key] = kernel.text_extent(self.sketch_plane, q['text'], q['font'], q['bold'], q['italic'])
+        return self._text_ext[key]
+
+    def _text_geometry(self):
+        """Ramka napisu w układzie szkicu i uchwyty: narożniki BL, BR, TR, TL, skalowanie (BR), obrót (czerwony punkt przy TR), przesuwanie (środek)."""
+        t = self.txt
+        u0, v0, u1, v1 = self._text_extent()
+        f = t['size'] / 10.0
+        m = max(.4, t['size'] * .08)
+        local = [(u0 * f - m, v0 * f - m), (u1 * f + m, v0 * f - m), (u1 * f + m, v1 * f + m), (u0 * f - m, v1 * f + m)]
+        d = max(t['size'] * .32, 2.5) / math.sqrt(2)
+        local_rot = (local[2][0] + d, local[2][1] + d)
+        a = math.radians(t['angle'])
+        ca, sa = math.cos(a), math.sin(a)
+        place = lambda p: (t['anchor'][0] + p[0] * ca - p[1] * sa, t['anchor'][1] + p[0] * sa + p[1] * ca)
+        corners = [place(p) for p in local]
+        center = place(((local[0][0] + local[2][0]) / 2, (local[0][1] + local[2][1]) / 2))
+        return dict(corners=corners, scale=corners[1], rotate=place(local_rot), move=center)
+
+    def _text_box_world(self):
+        g = self._text_geometry()
+        w = lambda p: kernel.to_world(self.sketch_plane, *p)
+        return dict(corners=[w(c) for c in g['corners']], scale=w(g['scale']), rotate=w(g['rotate']), move=w(g['move']))
+
+    def _text_refresh(self):
+        """Podgląd napisu na żywo + ramka z uchwytami."""
+        t = self.txt
+        if t is None or t.get('stage') != 'edit' or self.mode != 'sketch':
             return
         try:
-            shapes = self._text_shapes(u, v)
+            shapes = self._text_shapes()
+            mesh = _merge_meshes([kernel.display_mesh(w) for w in shapes])
+            self.view.set_preview_mesh(mesh, line_color=SKETCH_ORANGE, width=2.2)
+            self.view.sketch_box = self._text_box_world()
+            self.text_status.setText('Wpisz treść. Niebieski uchwyt skaluje, czerwony punkt obraca, wnętrze ramki przesuwa. Enter zatwierdza.')
+        except Exception as exc:
+            self.view.set_preview_mesh(None)
+            self.view.sketch_box = None
+            self.text_status.setText(str(exc) or 'Nie udało się utworzyć napisu.')
+        self.view.update()
+
+    def _text_spin_changed(self):
+        t = self.txt
+        if t is None or t.get('stage') != 'edit' or t.get('syncing'):
+            return
+        t['size'] = max(.1, self.text_size.value())
+        t['angle'] = self.text_angle.value()
+        self._text_refresh()
+
+    def _text_sync_spins(self):
+        t = self.txt
+        t['syncing'] = True
+        for spin, value in ((self.text_size, t['size']), (self.text_angle, t['angle'])):
+            spin.blockSignals(True)
+            spin.setValue(round(value, 2))
+            spin.blockSignals(False)
+        t['syncing'] = False
+
+    def _text_hit(self, x, y):
+        box = self._text_box_world()
+        for which in ('rotate', 'scale'):
+            xy = self.view.project_one(box[which])
+            if xy is not None and math.hypot(xy[0] - x, xy[1] - y) <= 16:
+                return which
+        pts = [self.view.project_one(c) for c in box['corners']]
+        if all(q is not None for q in pts):
+            from PySide6.QtCore import QPointF
+            from PySide6.QtGui import QPolygonF
+            if QPolygonF([QPointF(*q) for q in pts]).containsPoint(QPointF(x, y), Qt.OddEvenFill):
+                return 'move'
+        return None
+
+    def _text_hook(self, kind, x, y):
+        """Mysz w kreatorze tekstu: przeciągnięcie obszaru, potem uchwyty ramki (skala / obrót / przesunięcie)."""
+        t = self.txt
+        if t is None or t['stage'] == 'surface':
+            return False
+        plane = self.sketch_plane
+        if kind == 'press':
+            uv = self.view.plane_point(plane, x, y)
+            if uv is None:
+                return True
+            if t['stage'] == 'edit':
+                which = self._text_hit(x, y)
+                if which is not None:
+                    g = self._text_geometry()
+                    t['drag'] = dict(kind=which, uv0=uv, anchor0=t['anchor'], size0=t['size'], angle0=t['angle'], scale0=g['scale'], rot0=g['rotate'])
+                    return True
+            t['drag'] = dict(kind='area', uv0=uv, uv1=uv)
+            return True
+        drag = t.get('drag')
+        if drag is None:
+            return True
+        uv = self.view.plane_point(plane, x, y)
+        if kind == 'move':
+            if uv is None:
+                return True
+            if drag['kind'] == 'area':
+                drag['uv1'] = uv
+                try:
+                    self.view.set_preview_mesh(kernel.display_mesh(kernel.sketch_shape('rect', plane, [drag['uv0'], uv])), line_color=SKETCH_ORANGE, width=2, dashed=True)
+                except Exception:
+                    pass
+                return True
+            a0 = drag['anchor0']
+            if drag['kind'] == 'move':
+                t['anchor'] = (a0[0] + uv[0] - drag['uv0'][0], a0[1] + uv[1] - drag['uv0'][1])
+            elif drag['kind'] == 'scale':
+                r0 = math.hypot(drag['scale0'][0] - a0[0], drag['scale0'][1] - a0[1])
+                r1 = math.hypot(uv[0] - a0[0], uv[1] - a0[1])
+                if r0 > 1e-9:
+                    t['size'] = min(5000.0, max(.1, drag['size0'] * r1 / r0))
+            else:
+                ang = math.degrees(math.atan2(uv[1] - a0[1], uv[0] - a0[0]) - math.atan2(drag['rot0'][1] - a0[1], drag['rot0'][0] - a0[0]))
+                ang = (drag['angle0'] + ang + 180.0) % 360.0 - 180.0
+                t['angle'] = round(ang, 1)
+            self._text_sync_spins()
+            self._text_refresh()
+            return True
+        if kind == 'release':
+            t['drag'] = None
+            if drag['kind'] == 'area':
+                self._text_area_done(drag['uv0'], drag.get('uv1', drag['uv0']))
+            return True
+        return True
+
+    def _text_area_done(self, p0, p1):
+        t = self.txt
+        w, h = abs(p1[0] - p0[0]), abs(p1[1] - p0[1])
+        self.view.set_preview_mesh(None)
+        try:
+            u0, v0, u1, v1 = self._text_extent()
+            ew, eh = max(u1 - u0, 1e-6), max(v1 - v0, 1e-6)
+            if w < .5 or h < .5:      # samo kliknięcie: napis o bieżącej wysokości, lewy dolny róg w klikniętym punkcie
+                size = t['size']
+                t['anchor'] = (p0[0] - u0 * size / 10.0, p0[1] - v0 * size / 10.0)
+            else:
+                size = min(5000.0, max(.1, min(w / ew, h / eh) * 10.0))
+                cu, cv = (p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2
+                t['anchor'] = (cu - (u0 + u1) / 2 * size / 10.0, cv - (v0 + v1) / 2 * size / 10.0)
+            t['size'], t['angle'] = size, 0.0
+        except Exception as exc:
+            self.toast(str(exc) or 'Wpisz treść napisu.')
+            return
+        self._text_sync_spins()
+        self._text_set_stage('edit')
+
+    def apply_text(self):
+        t = self.txt
+        if self.busy or self.mode != 'sketch' or self.tool != 'text' or t is None:
+            return
+        if t['stage'] != 'edit':
+            self.toast('Najpierw wybierz powierzchnię i zaznacz obszar napisu.')
+            return
+        try:
+            shapes = self._text_shapes()
         except kernel.CadError as exc:
             self.toast(str(exc))
             return
         self.view.set_preview_mesh(None)
         self.create_sketch(shapes, 'Tekst')
+        self._text_set_stage('area')   # kolejny napis na tej samej powierzchni
 
-    def text_preview(self):
-        """Pomarańczowy podgląd napisu w miejscu kursora (albo we wpisanej pozycji) - widać rozmiar, obrót i czcionkę przed wstawieniem."""
-        if self.mode != 'sketch' or self.tool != 'text' or self.busy:
-            return
-        uv = getattr(self, 'last_uv', None)
-        if uv is None:
-            uv = (self.text_u.value(), self.text_v.value())
-        try:
-            shapes = self._text_shapes(*uv)
-            mesh = _merge_meshes([kernel.display_mesh(w) for w in shapes])
-            self.view.set_preview_mesh(mesh, line_color=SKETCH_ORANGE, width=2.2)
-        except Exception as exc:
-            self.view.set_preview_mesh(None)
-            self.text_status.setText(str(exc))
+    def text_cancel(self):
+        if self.txt is not None and self.txt['stage'] == 'edit':
+            self._text_set_stage('area')
+        else:
+            self.choose_tool('rect')
 
     def sketch_moved(self, plane, u, v):
         if self.mode != 'sketch' or self.busy:
@@ -1032,15 +1239,6 @@ class StudioWindow(QMainWindow):
                     self.view.set_preview_mesh(kernel.display_mesh(shape), line_color=SKETCH_ORANGE, width=2, dashed=True)
                 except kernel.CadError:
                     self.view.set_preview_mesh(None)
-            return
-        if self.tool == 'text':
-            self.text_u.blockSignals(True)
-            self.text_v.blockSignals(True)
-            self.text_u.setValue(round(u, 2))
-            self.text_v.setValue(round(v, 2))
-            self.text_u.blockSignals(False)
-            self.text_v.blockSignals(False)
-            self.text_preview()
             return
         if not self.points or self.dim_panel.isVisible():
             return          # wartości wpisane z klawiatury mają pierwszeństwo przed kursorem
@@ -1104,7 +1302,6 @@ class StudioWindow(QMainWindow):
                 self.create_sketch([shape])
                 return
             if t == 'text':
-                self.place_text(u, v)
                 return
         except kernel.CadError as exc:
             self.toast(str(exc))
@@ -1402,6 +1599,8 @@ class StudioWindow(QMainWindow):
         self.dim.show()
 
     def _sketch_hook(self, kind, x, y):
+        if self.mode == 'sketch' and self.tool == 'text' and not self.busy:
+            return self._text_hook(kind, x, y)
         if self.mode != 'sketch' or self.tool is not None or self.busy:
             return False
         if kind == 'press':
@@ -1495,7 +1694,7 @@ class StudioWindow(QMainWindow):
         if self.busy:
             return
         try:
-            if self.mode == 'plane':
+            if self.mode == 'plane' or (self.mode == 'sketch' and self.tool == 'text' and self.txt and self.txt['stage'] == 'surface'):
                 frame, face = self.pick_surface(x, y)
                 key = ('f', face.hashCode()) if face is not None else ('p', frame if isinstance(frame, str) else None)
                 if key != self._hover_key:
@@ -1551,6 +1750,15 @@ class StudioWindow(QMainWindow):
             self.view.set_preview_mesh(kernel.display_mesh(face) if face is not None else None, **blue)
     def view_clicked(self, x, y, shift, ctrl):
         if self.busy:
+            return
+        if self.mode == 'sketch' and self.tool == 'text' and self.txt is not None:
+            if self.txt['stage'] == 'surface':
+                plane, _ = self.pick_surface(x, y)
+                if plane is None:
+                    self.toast('Kliknij płaszczyznę lub płaską ścianę bryły.')
+                    return
+                self._text_plane_keep = True
+                self.enter_sketch(plane)
             return
         if self.mode == 'sketch':
             if self.tool is None and self.selected:
@@ -2465,7 +2673,7 @@ class StudioWindow(QMainWindow):
 
     def sketch_hover_wanted(self):
         """Kursor ze znacznikiem i przyciąganiem działa dopiero po wybraniu miejsca rysowania (pierwszy klik) — bez ciągłego liczenia."""
-        return bool(self.points) or self.tool in ('trim', 'text') or (self.tool == 'circleTangent2' and len(self.tangent_lines) == 2)
+        return bool(self.points) or self.tool == 'trim' or (self.tool == 'circleTangent2' and len(self.tangent_lines) == 2)
 
     def context_menu(self, x, y):
         if self.busy:
@@ -2612,6 +2820,8 @@ class StudioWindow(QMainWindow):
         if key in (Qt.Key_Return, Qt.Key_Enter):
             action = {'extrude': self.apply_extrude, 'bool': self.apply_bool, 'mod': self.apply_mod, 'mirror': self.apply_mirror,
                       'move': self.apply_transform, 'rotate': self.apply_transform}.get(self.mode)
+            if action is None and self.mode == 'sketch' and self.tool == 'text' and self.txt and self.txt['stage'] == 'edit':
+                action = self.apply_text
             if action:
                 action()
                 event.accept()
@@ -2627,7 +2837,7 @@ class StudioWindow(QMainWindow):
                 self.refresh()
                 self._update_grips()
             elif self.mode == 'sketch' and self.tool == 'text':
-                self.choose_tool('rect')
+                self.text_cancel()
             elif self.mode is not None:
                 self.set_mode(None)
             else:

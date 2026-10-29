@@ -569,6 +569,46 @@ def font_file(family, bold=False, italic=False):
 
 
 _TEXT_CACHE = {}
+_TEXT_REF = 10.0   # wysokość odniesienia: napis liczymy raz, a rozmiar / obrót / położenie to tanie przekształcenia druty
+
+
+def _text_direct(plane, text, size, font, bold, italic, halign):
+    fr = frame_of(plane)
+    n0, o0 = np.array(fr.normal), np.array(fr.origin)
+    kind = "bold" if bold else ("italic" if italic else "regular")
+    for name, path in ((font, font_file(font, bold, italic)), ("Arial", font_file("Arial", bold, italic)), ("Sans", None)):
+        try:
+            solid = wp(plane).text(text, float(size), 0.2, combine=False, font=name, fontPath=path, kind=kind,
+                                   halign=halign, valign="bottom").val()
+        except Exception:
+            continue
+        wires = [w for f in (solid.Faces() if solid is not None else [])
+                 if abs(float((np.array(f.Center().toTuple()) - o0) @ n0)) < 1e-5 and abs(abs(float(np.array(f.normalAt().toTuple()) @ n0)) - 1) < 1e-3
+                 for w in f.Wires()]
+        if wires:
+            return wires
+    raise CadError("Nie udało się utworzyć tekstu (brak czcionki lub znaków w czcionce).")
+
+
+def _text_base(plane, text, font, bold, italic, halign):
+    key = (frame_of(plane), text, font, bool(bold), bool(italic), halign)
+    wires = _TEXT_CACHE.get(key)
+    if wires is None:
+        wires = _text_direct(plane, text, _TEXT_REF, font, bold, italic, halign)
+        if len(_TEXT_CACHE) > 24:
+            _TEXT_CACHE.clear()
+        _TEXT_CACHE[key] = wires
+    return wires
+
+
+def text_extent(plane, text, font="Arial", bold=False, italic=False, halign="left"):
+    """Obrys napisu (umin, vmin, umax, vmax) w układzie szkicu dla wysokości odniesienia 10 mm i kotwicy w punkcie (0, 0)."""
+    text = str(text).strip()
+    if not text:
+        raise CadError("Wpisz treść tekstu.")
+    wires = _text_base(plane, text, font, bold, italic, halign)
+    pts = np.array([uv_of(plane, e.positionAt(t).toTuple()) for w in wires for e in w.Edges() for t in (0.0, .25, .5, .75, 1.0)], dtype=float)
+    return float(pts[:, 0].min()), float(pts[:, 1].min()), float(pts[:, 0].max()), float(pts[:, 1].max())
 
 
 def text_shape(plane, text, u, v, size=10.0, font="Arial", bold=False, halign="left", angle=0.0, italic=False):
@@ -577,34 +617,23 @@ def text_shape(plane, text, u, v, size=10.0, font="Arial", bold=False, halign="l
     text = str(text).strip()
     if not text:
         raise CadError("Wpisz treść tekstu.")
-    key = (frame_of(plane), text, round(float(size), 4), font, bool(bold), bool(italic), halign, round(float(angle), 4))
-    cached = _TEXT_CACHE.get(key)
-    if cached is None:
-        kind = "bold" if bold else ("italic" if italic else "regular")
-        fr = frame_of(plane)
-        n0, o0 = np.array(fr.normal), np.array(fr.origin)
-        wires = []
-        for name, path in ((font, font_file(font, bold, italic)), ("Arial", font_file("Arial", bold, italic)), ("Sans", None)):
-            try:
-                solid = wp(plane).text(text, float(size), 0.2, combine=False, font=name, fontPath=path, kind=kind,
-                                       halign=halign, valign="bottom").val()
-            except Exception:
-                continue
-            wires = [w for f in (solid.Faces() if solid is not None else [])
-                     if abs(float((np.array(f.Center().toTuple()) - o0) @ n0)) < 1e-5 and abs(abs(float(np.array(f.normalAt().toTuple()) @ n0)) - 1) < 1e-3
-                     for w in f.Wires()]
-            if wires:
-                break
-        if not wires:
-            raise CadError("Nie udało się utworzyć tekstu (brak czcionki lub znaków w czcionce).")
-        if abs(float(angle)) > 1e-9:
-            pivot = cq.Vector(*o0)
-            wires = [w.rotate(pivot, pivot + cq.Vector(*n0), float(angle)) for w in wires]
-        if len(_TEXT_CACHE) > 24:
-            _TEXT_CACHE.clear()
-        cached = _TEXT_CACHE[key] = wires
-    shift = cq.Vector(*(np.array(to_world(plane, float(u), float(v)), float) - np.array(to_world(plane, 0.0, 0.0), float)))
-    return [w.translate(shift) for w in cached]
+    size = float(size)
+    if not isfinite(size) or size <= 0:
+        raise CadError("Wysokość liter musi być dodatnia.")
+    fr = frame_of(plane)
+    n0, o0 = np.array(fr.normal, float), np.array(fr.origin, float)
+    wires = _text_base(plane, text, font, bold, italic, halign)
+    factor = size / _TEXT_REF
+    try:
+        back = cq.Vector(*o0)
+        wires = [w.translate(back * -1).scale(factor).translate(back) for w in wires] if abs(factor - 1) > 1e-9 else list(wires)
+    except Exception:
+        wires = _text_direct(plane, text, size, font, bold, italic, halign)
+    if abs(float(angle)) > 1e-9:
+        pivot = cq.Vector(*o0)
+        wires = [w.rotate(pivot, pivot + cq.Vector(*n0), float(angle)) for w in wires]
+    shift = cq.Vector(*(np.array(to_world(plane, float(u), float(v)), float) - o0))
+    return [w.translate(shift) for w in wires]
 
 
 def profile_normal(shape, reference):

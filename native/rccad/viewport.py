@@ -104,6 +104,32 @@ class Overlay2D(QWidget):
                 p.drawEllipse(QPointF(*xy), 4.5, 4.5)
                 p.drawLine(QPointF(xy[0] - 9, xy[1]), QPointF(xy[0] + 9, xy[1]))
                 p.drawLine(QPointF(xy[0], xy[1] - 9), QPointF(xy[0], xy[1] + 9))
+            box = v.sketch_box
+            if box:
+                pts = [v.project_one(c) for c in box['corners']]
+                if all(q is not None for q in pts):
+                    blue = QColor('#2f87e8')
+                    p.setPen(QPen(blue, 1.6, Qt.DashLine))
+                    p.setBrush(QColor(47, 135, 232, 24))
+                    p.drawPolygon(QPolygonF([QPointF(*q) for q in pts]))
+                    corner, rot = v.project_one(box['corners'][2]), v.project_one(box['rotate'])
+                    if corner is not None and rot is not None:
+                        p.setPen(QPen(QColor('#e5262b'), 1.6))
+                        p.drawLine(QPointF(*corner), QPointF(*rot))
+                    sc, mv = v.project_one(box['scale']), v.project_one(box['move'])
+                    if mv is not None:
+                        p.setPen(QPen(blue, 1.8))
+                        p.drawLine(QPointF(mv[0] - 6, mv[1]), QPointF(mv[0] + 6, mv[1]))
+                        p.drawLine(QPointF(mv[0], mv[1] - 6), QPointF(mv[0], mv[1] + 6))
+                    if sc is not None:
+                        p.setPen(QPen(blue, 2))
+                        p.setBrush(QColor('#ffffff'))
+                        p.drawRect(QRectF(sc[0] - 7, sc[1] - 7, 14, 14))
+                        p.drawLine(QPointF(sc[0] - 3.5, sc[1] + 3.5), QPointF(sc[0] + 3.5, sc[1] - 3.5))
+                    if rot is not None:
+                        p.setPen(QPen(QColor('#ffffff'), 2))
+                        p.setBrush(QColor('#e5262b'))
+                        p.drawEllipse(QPointF(*rot), 8, 8)
             for g in v.sketch_grips:
                 xy = v.project_one(g)
                 if xy is None:
@@ -346,6 +372,7 @@ class CadView(gl.GLViewWidget):
         self.snap_label = None
         self.sketch_centers = []
         self.sketch_grips = []
+        self.sketch_box = None
         self.drag_hook = None
         self._hook_active = False
         self.snap_marker = None       # ((x, y), etykieta) - przyciąganie jak w wersji HTML

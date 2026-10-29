@@ -208,20 +208,29 @@ class StudioTests(unittest.TestCase):
         self.assertEqual(len(w.tangent_lines),2);w.sketch_clicked('XY',10,10);self.wait()
         self.assertEqual(len(w.document.bodies),3)
 
-    def test_text_creates_profiles_when_font_exists(self):
+    def test_text_wizard_surface_area_handles_and_enter(self):
         try:k.text_shape('XY','AB',0,0,10)
-        except Exception:self.skipTest('brak czcionki w środowisku')
-        self.sketch('text',(0,0));self.assertGreaterEqual(len(self.w.document.bodies),1)
-
-    def test_text_keeps_letter_holes_and_previews(self):
-        try:k.text_shape('XY','O',0,0,10)
         except Exception:self.skipTest('brak czcionki w środowisku')
         self.assertGreaterEqual(len(k.text_shape('XY','O',0,0,10)),2)
         a=k.text_shape('XY','Ab',0,0,10)[0].Center().toTuple();b=k.text_shape('XY','Ab',30,5,10)[0].Center().toTuple()
         self.assertAlmostEqual(b[0]-a[0],30,3);self.assertAlmostEqual(b[1]-a[1],5,3)
-        w=self.w;w.set_mode('plane');w.plane_picked('XY');w.choose_tool('text');w.sketch_moved('XY',12,3);self.assertTrue(w.view.preview_items)
-        before=len(w.document.bodies);w.text_u.setValue(5);w.text_v.setValue(5);w.place_text(5,5);self.wait()
-        self.assertGreater(len(w.document.bodies),before)
+        s20=k.text_shape('XY','Ab',0,0,20)[0].Center().toTuple();self.assertAlmostEqual(s20[0],a[0]*2,3)
+        w=self.w;w.set_mode('plane');w.plane_picked('XY');w.choose_tool('text')
+        self.assertEqual(w.txt['stage'],'surface');self.assertTrue(w.view.plane_pick)
+        with patch.object(w,'pick_surface',return_value=('XZ',None)):w.view_clicked(5,5,False,False)
+        self.assertEqual((w.txt['stage'],w.sketch_plane),('area',"XZ"))
+        with patch.object(w.view,'plane_point',side_effect=lambda pl,x,y:(x/10,y/10)),patch.object(w.view,'project_one',side_effect=lambda p:(p[0]*10,p[2]*10) if True else None):
+            self.assertTrue(w._sketch_hook('press',0,0));w._sketch_hook('move',300,100);w._sketch_hook('release',300,100)
+            self.assertEqual(w.txt['stage'],'edit');self.assertIsNotNone(w.view.sketch_box);size0=w.txt['size'];self.assertGreater(size0,0)
+            g=w._text_geometry();bx=w._text_box_world()
+            sx,sy=bx['scale'][0]*10,bx['scale'][2]*10
+            self.assertTrue(w._sketch_hook('press',sx,sy));w._sketch_hook('move',sx*1.5,sy*1.5);w._sketch_hook('release',sx*1.5,sy*1.5)
+            self.assertGreater(w.txt['size'],size0)
+            rx,ry=w._text_box_world()['rotate'][0]*10,w._text_box_world()['rotate'][2]*10
+            self.assertTrue(w._sketch_hook('press',rx,ry));w._sketch_hook('move',rx-80,ry+80);w._sketch_hook('release',rx-80,ry+80)
+            self.assertNotEqual(w.txt['angle'],0.0)
+        before=len(w.document.bodies);ev=QKeyEvent(QEvent.KeyPress,Qt.Key_Return,Qt.NoModifier);w.keyPressEvent(ev);self.wait()
+        self.assertGreater(len(w.document.bodies),before);self.assertEqual(w.txt['stage'],'area')
 
     def test_typed_dimensions_are_live(self):
         w=self.w;w.set_mode('plane');w.plane_picked('XY');w.choose_tool('rect');w.sketch_clicked('XY',0,0)
