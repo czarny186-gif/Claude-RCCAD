@@ -402,6 +402,44 @@ def blend_vertices(shape, points, size, kind="fillet"):
     return valid(result)
 
 
+def local_piece(shape, edge_indices=None, points=None, margin=10.0):
+    """Fragment bryły wokół zaznaczonych krawędzi / narożników (część wspólna z prostopadłościanem): podgląd fazy i zaokrąglenia liczy się
+    na małym kawałku zamiast na całej, skomplikowanej bryle - kilkadziesiąt razy szybciej."""
+    lows, highs = [], []
+    all_edges = shape.Edges()
+    for i in edge_indices or ():
+        bb = all_edges[i].BoundingBox()
+        lows.append((bb.xmin, bb.ymin, bb.zmin))
+        highs.append((bb.xmax, bb.ymax, bb.zmax))
+    for q in points or ():
+        lows.append(tuple(float(c) for c in q))
+        highs.append(tuple(float(c) for c in q))
+    if not lows:
+        return None
+    lo, hi = np.min(lows, axis=0) - margin, np.max(highs, axis=0) + margin
+    box = cq.Solid.makeBox(*(float(c) for c in (hi - lo)), pnt=cq.Vector(*(float(c) for c in lo)))
+    piece = shape.intersect(box)
+    return piece if piece is not None and not piece.wrapped.IsNull() and piece.Solids() else None
+
+
+def map_edges(shape, piece, indices, tol=1e-4):
+    """Indeksy krawędzi `indices` bryły `shape` w fragmencie `piece` (dopasowanie po początku, środku i końcu)."""
+    own = shape.Edges()
+    local = piece.Edges()
+    probe = lambda e: [np.array(e.positionAt(t).toTuple()) for t in (0.0, .5, 1.0)]
+    cache = [probe(e) for e in local]
+    out = []
+    for i in indices:
+        a = probe(own[i])
+        for j, b in enumerate(cache):
+            if all(float(np.linalg.norm(x - y)) < tol for x, y in zip(a, b)) or all(float(np.linalg.norm(x - y)) < tol for x, y in zip(a, b[::-1])):
+                out.append(j)
+                break
+        else:
+            return None
+    return out
+
+
 def blend(shape, indices, size, kind="fillet"):
     size = positive(size, "Promień / odległość")
     edges = shape.Edges()

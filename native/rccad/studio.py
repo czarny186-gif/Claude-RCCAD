@@ -583,6 +583,8 @@ class StudioWindow(QMainWindow):
         self.pat_step1 = ui.StepRow(1, 'x_object', 'Obiekt do szyku', plain=True)
         self.pat_step2 = ui.StepRow(2, 'x_pat_path', 'Ścieżka (linia lub krawędź)', plain=True)
         lay.addWidget(self.pat_step1)
+        self.pat_filter = ui.Segmented([('Auto', 'auto', 'x_object'), ('Bryła', 'solid', 'x_extrude'), ('Szkic', 'sketch', 'x_area')], 20)
+        lay.addWidget(self.pat_filter)
         lay.addWidget(self.pat_step2)
         self.pat_kind = ui.Segmented([('Prostokątny', 'rect', 'x_pat_rect'), ('Kołowy', 'circ', 'x_pat_circ'), ('Wzdłuż linii', 'path', 'x_pat_path')], 34)
         lay.addWidget(self.pat_kind)
@@ -1870,9 +1872,11 @@ class StudioWindow(QMainWindow):
                 self.view.setCursor(Qt.SizeAllCursor if hit else Qt.ArrowCursor)
             elif self.mode == 'mirror' and self.mirror_id and self.mirror_frame is None:
                 self._hover_face_only(x, y)
+            elif self.mode == 'pattern' and self.pat_id is None:
+                self._pattern_hover(x, y)
             elif self.mode == 'pattern' and self.pat_id and self.pat_picking:
-                vertex = self.view.nearest_vertex(x, y)
-                self.view.hover_vertex = vertex[1] if vertex else None
+                target = self._pattern_target(x, y)
+                self.view.hover_vertex = target
                 self.view.overlay.update()
             elif self.mode == 'pattern' and self.pat_id and self.pat_kind.currentData() == 'path':
                 self.view._set_hover_edge(self.view.nearest_edge(x, y))
@@ -2504,8 +2508,24 @@ class StudioWindow(QMainWindow):
         points = [np.array(q, float) for q in (self.mod_vertices.get(bid) or [])] if verts else None
 
         def compute():
-            result = kernel.blend_vertices(body.shape, points, size, kind) if verts else kernel.blend(body.shape, ids, size, kind)
-            return kernel.display_mesh(result, PREVIEW_TOL), result.Volume() > body.shape.Volume() + 1e-6
+            shape, local_ids = body.shape, ids
+            margin = max(4.0 * size, 2.0)
+            try:
+                if len(shape.Faces()) > 10:      # duża bryła: podgląd liczymy na małym fragmencie wokół zaznaczenia
+                    key = (id(shape), sig, round(margin, 3))
+                    cached = getattr(self, '_mod_piece', None)
+                    if cached and cached[0] == key:
+                        piece, mapped = cached[1], cached[2]
+                    else:
+                        piece = kernel.local_piece(shape, None if verts else ids, points if verts else None, margin)
+                        mapped = None if (piece is None or verts) else kernel.map_edges(shape, piece, sorted(ids))
+                        self._mod_piece = (key, piece, mapped)
+                    if piece is not None and (verts or mapped is not None):
+                        shape, local_ids = piece, (None if verts else set(mapped))
+            except Exception:
+                shape, local_ids = body.shape, ids
+            result = kernel.blend_vertices(shape, points, size, kind) if verts else kernel.blend(shape, local_ids, size, kind)
+            return kernel.display_mesh(result, PREVIEW_TOL), result.Volume() > shape.Volume() + 1e-6
 
         def show(value, error):
             if self.mode != 'mod' or getattr(self, '_mod_sig', None) != sig:
@@ -2663,9 +2683,45 @@ class StudioWindow(QMainWindow):
         pts = mesh.vertices if len(mesh.vertices) else np.concatenate([e.reshape(-1, 3) for e in mesh.edges.values()])
         return np.min(pts, axis=0), np.max(pts, axis=0)
 
+    def _pattern_candidate(self, x, y):
+        """Co zostanie wybrane pod kursorem: bid obiektu lub None. Szkic ma pierwszeństwo przed bryłą (chyba że filtr mówi inaczej)."""
+        mode = self.pat_filter.currentData()
+        if mode in ('auto', 'sketch'):
+            hit = self.view.nearest_edge(x, y, kinds=('sketch',))
+            if hit:
+                return hit[0]
+            if mode == 'sketch':
+                return self.view.pick_profile(x, y)
+        solid = self.view.pick_body(x, y)
+        if solid is not None and (mode == 'solid' or (self.document.get(solid) is not None and self.document.get(solid).kind == 'solid')):
+            return solid
+        if mode == 'solid':
+            hit = self.view.nearest_edge(x, y, True)
+            return hit[0] if hit else None
+        return solid
+
+    def _pattern_hover(self, x, y):
+        bid = self._pattern_candidate(x, y)
+        body = self.document.get(bid) if bid else None
+        if getattr(self, '_pat_hover_id', 0) != bid:
+            self._pat_hover_id = bid
+            self.view.set_hover_body(bid if body is not None and body.kind == 'sketch' else None)
+            if body is not None and body.kind == 'solid' and body.mesh is not None:
+                self.view.set_selection_meshes([body.mesh], color=(1, .55, .1, .35), line_color=(.95, .42, .02, 1))
+            else:
+                self.view.set_selection_meshes(None)
+            if body is None:
+                self.pat_step1.set_state('active', 'Kliknij bryłę lub szkic')
+            else:
+                self.pat_step1.set_state('active', ('Szkic: ' if body.kind == 'sketch' else 'Bryła: ') + body.name)
+        self.view.setCursor(Qt.PointingHandCursor if body is not None else Qt.ArrowCursor)
+
     def pick_pattern(self, x, y):
         if self.pat_id is None:
-            bid = self.pick_object(x, y)
+            bid = self._pattern_candidate(x, y)
+            self.view.set_hover_body(None)
+            self.view.set_selection_meshes(None)
+            self._pat_hover_id = 0
             body = self.document.get(bid) if bid else None
             if body is None or body.mesh is None:
                 self.toast('Kliknij bryłę lub szkic, który ma być powielony.')
@@ -2761,26 +2817,35 @@ class StudioWindow(QMainWindow):
             self.toast('Najpierw wybierz obiekt.')
             return
         if on:
-            self.toast('Kliknij wierzchołek, ścianę lub płaszczyznę, która ma być środkiem obrotu.', 4000)
+            self.toast('Kliknij dowolny punkt: wierzchołek, ścianę, płaszczyznę lub podłoże - to będzie środek obrotu.', 4000)
         self.view.setCursor(Qt.CrossCursor if on else Qt.ArrowCursor)
 
-    def _pattern_pick_point(self, x, y):
-        vertex = self.view.nearest_vertex(x, y)
-        point = None
+    def _pattern_target(self, x, y):
+        """Dowolny punkt środka obrotu: wierzchołek (też szkicu), punkt na ścianie, płaszczyzna lub podłoże (z=0)."""
+        vertex = self.view.nearest_vertex(x, y, solids_only=False)
         if vertex is not None:
-            point = vertex[1]
-        else:
-            hit = self.view.pick_face(x, y)
-            if hit is not None:
-                point = hit[2]
-            else:
-                name = self.view.plane_at(x, y)
-                found = self.view._plane_hit(name, x, y) if name else None
-                point = found[1] if found else None
+            return np.array(vertex[1], float)
+        hit = self.view.pick_face(x, y)
+        if hit is not None:
+            return np.array(hit[2], float)
+        name = self.view.plane_at(x, y)
+        found = self.view._plane_hit(name, x, y) if name else None
+        if found:
+            return np.array(found[1], float)
+        ray = self.view._ray(x, y)
+        if ray is not None:
+            ground = self.view._ray_plane(ray, np.zeros(3), np.array([0.0, 0.0, 1.0]))
+            if ground is not None:
+                return np.array(ground, float)
+        return None
+
+    def _pattern_pick_point(self, x, y):
+        point = self._pattern_target(x, y)
         if point is None:
-            self.toast('Kliknij punkt na modelu lub na płaszczyźnie.')
+            self.toast('Kliknij dowolny punkt w przestrzeni roboczej.')
             return
         self._pattern_set(self.pat_pivot, point)
+        self.view.hover_vertex = None
         self.pat_pick.setChecked(False)
         self._pattern_pivot_changed()
 

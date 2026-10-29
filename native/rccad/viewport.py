@@ -719,6 +719,23 @@ class CadView(gl.GLViewWidget):
                 self.addItem(self._hover_item)
         self.update()
 
+    def set_hover_body(self, bid):
+        """Podświetla na pomarańczowo wszystkie krawędzie jednego obiektu (np. szkicu) - widać, co zostanie wybrane."""
+        key = ('body', bid)
+        if key == self._hover_key or (bid is None and self._hover_key is None):
+            return
+        self._hover_key = key if bid is not None else None
+        if self._hover_item is not None:
+            self.removeItem(self._hover_item)
+            self._hover_item = None
+        body = next((b for b in self.bodies if b.id == bid), None) if bid is not None else None
+        if body is not None and body.mesh is not None:
+            seg = _segments(body.mesh.edges.values())
+            if seg is not None:
+                self._hover_item = gl.GLLinePlotItem(pos=seg, color=(1, .65, .2, 1), width=5, antialias=True, mode='lines')
+                self.addItem(self._hover_item)
+        self.update()
+
     # ---------- podglądy i wybieranie (studio) ----------
     def _dashed(self, points):
         pts = np.asarray(points, float)
@@ -1118,11 +1135,11 @@ class CadView(gl.GLViewWidget):
                         distance, best = float(dist[j]), (body.id, index)
         return best
 
-    def nearest_vertex(self, x, y, radius=11.0):
-        """Wierzchołek bryły (koniec krawędzi) najbliżej kursora: (id bryły, punkt 3D) albo None."""
+    def nearest_vertex(self, x, y, radius=11.0, solids_only=True):
+        """Wierzchołek (koniec krawędzi) najbliżej kursora: (id obiektu, punkt 3D) albo None; solids_only=False obejmuje też punkty szkiców."""
         best = None
         for body in self.bodies:
-            if not body.visible or not body.mesh or body.kind != 'solid':
+            if not body.visible or not body.mesh or (solids_only and body.kind != 'solid') or body.kind not in ('solid', 'sketch'):
                 continue
             ends = {}
             for points in body.mesh.edges.values():

@@ -170,6 +170,20 @@ class StudioTests(unittest.TestCase):
         with patch.object(w.view,'pick_face',return_value=(a.id,[0,0,1],far.tolist())):w.view_double_clicked(5,5)
         self.assertEqual(w.mod_vertices,{});self.assertGreaterEqual(len(w.edges[a.id]),4);self.assertTrue(w.view.selection_items)
 
+    def test_local_piece_preview_matches_edge_and_pattern_candidate_prefers_sketch(self):
+        w=self.w;a=Body('A',k.box(20,20,20)).prepared()
+        piece=k.local_piece(a.shape,{0},None,5.0);self.assertIsNotNone(piece);m=k.map_edges(a.shape,piece,[0]);self.assertIsNotNone(m)
+        self.assertLess(k.blend(piece,set(m),2,'chamfer').Volume(),piece.Volume())
+        w.document.commit([a]);w.refresh();w.set_mode('pattern')
+        with patch.object(w.view,'nearest_edge',return_value=None),patch.object(w.view,'pick_body',return_value=a.id):
+            self.assertEqual(w._pattern_candidate(5,5),a.id)
+        w.pat_filter.setCurrentIndex(2)
+        with patch.object(w.view,'pick_profile',return_value=None),patch.object(w.view,'nearest_edge',return_value=None),patch.object(w.view,'pick_body',return_value=a.id):
+            self.assertIsNone(w._pattern_candidate(5,5))
+        w.pat_filter.setCurrentIndex(0);w.pat_id=a.id
+        with patch.object(w.view,'nearest_vertex',return_value=None),patch.object(w.view,'pick_face',return_value=None),patch.object(w.view,'plane_at',return_value=None),patch.object(w.view,'_ray',return_value=(np.array([0,0,10.]),np.array([0,0,-1.]))):
+            self.assertTrue(np.allclose(w._pattern_target(5,5),[0,0,0]))
+
     def test_chamfer(self):
         w=self.w;a=Body('A',k.box(20,20,20)).prepared();w.document.commit([a]);w.refresh();w.set_mode('mod');w.mod_kind.setCurrentIndex(1)
         w.edges={a.id:{0}};w.mod_size.setValue(2);w.apply_mod();self.wait();self.assertLess(w.document.bodies[0].shape.Volume(),8000)
