@@ -74,6 +74,36 @@ def pixmap(kind: str, size: int = 38, scale: int = 2) -> QPixmap:
         p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE)); p.drawPolygon(tri)
         p.setBrush(QColor('#d6f1e3')); p.setPen(pen(GREEN)); p.drawPolygon(mir)
         pn = pen(ORANGE, 2); pn.setStyle(Qt.DashLine); p.setPen(pn); p.drawLine(QPointF(24, 5), QPointF(24, 43))
+    elif kind == 'x_extrude':
+        pn = pen(BLUE, 2.0); pn.setStyle(Qt.DashLine); p.setPen(pn); p.setBrush(Qt.NoBrush)
+        p.drawPolygon(QPolygonF([QPointF(5, 22), QPointF(17, 12), QPointF(43, 12), QPointF(31, 22)]))
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4))
+        p.drawPolygon(QPolygonF([QPointF(5, 40), QPointF(17, 30), QPointF(43, 30), QPointF(31, 40)]))
+        p.setPen(pen(ORANGE, 3.6)); p.drawLine(QPointF(24, 30), QPointF(24, 16))
+        p.setBrush(QColor(ORANGE)); p.setPen(Qt.NoPen); p.drawPolygon(QPolygonF([QPointF(24, 7), QPointF(17, 17), QPointF(31, 17)]))
+    elif kind == 'x_bool':
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4)); p.drawRoundedRect(QRectF(5, 7, 26, 26), 5, 5)
+        p.setBrush(QColor('#d6f1e3')); p.setPen(pen(GREEN, 2.4)); p.drawRoundedRect(QRectF(17, 17, 26, 26), 5, 5)
+        pn = pen(ORANGE, 2.2); pn.setStyle(Qt.DashLine); p.setPen(pn); p.setBrush(Qt.NoBrush); p.drawRect(QRectF(17, 17, 14, 16))
+    elif kind == 'x_mod':
+        path = QPainterPath(); path.moveTo(7, 41); path.lineTo(7, 14); path.lineTo(25, 14); path.quadTo(41, 14, 41, 30); path.lineTo(41, 41); path.closeSubpath()
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.4)); p.drawPath(path)
+        arc = QPainterPath(); arc.moveTo(25, 14); arc.quadTo(41, 14, 41, 30)
+        p.setBrush(Qt.NoBrush); p.setPen(pen(ORANGE, 4.0)); p.drawPath(arc)
+    elif kind == 'x_object':
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.2))
+        p.drawPolygon(QPolygonF([QPointF(6, 18), QPointF(20, 10), QPointF(34, 18), QPointF(20, 26)]))
+        p.setBrush(QColor('#9cc6f4')); p.drawPolygon(QPolygonF([QPointF(6, 18), QPointF(20, 26), QPointF(20, 42), QPointF(6, 34)]))
+        p.setBrush(QColor('#74aeea')); p.drawPolygon(QPolygonF([QPointF(20, 26), QPointF(34, 18), QPointF(34, 34), QPointF(20, 42)]))
+        p.setBrush(QColor(ORANGE)); p.setPen(pen('#ffffff', 1.6))
+        p.drawPolygon(QPolygonF([QPointF(30, 24), QPointF(30, 42), QPointF(35, 37), QPointF(38.5, 45), QPointF(41.5, 43.6), QPointF(38, 35.5), QPointF(44.5, 35)]))
+    elif kind == 'x_wall':
+        p.setBrush(QColor('#d6f1e3')); p.setPen(pen(GREEN, 2.4))
+        p.drawPolygon(QPolygonF([QPointF(15, 7), QPointF(33, 13), QPointF(33, 41), QPointF(15, 35)]))
+        p.setBrush(QColor(BLUE_SOFT)); p.setPen(pen(BLUE, 2.0))
+        p.drawPolygon(QPolygonF([QPointF(4, 36), QPointF(4, 22), QPointF(12, 29)]))
+        p.drawPolygon(QPolygonF([QPointF(44, 36), QPointF(44, 22), QPointF(36, 29)]))
+        pn = pen(ORANGE, 2.2); pn.setStyle(Qt.DashLine); p.setPen(pn); p.drawLine(QPointF(24, 4), QPointF(24, 44))
     elif kind == 'x_text':
         p.setPen(pen(INK, 4.6)); p.drawLine(QPointF(10, 11), QPointF(34, 11)); p.drawLine(QPointF(22, 11), QPointF(22, 36))
         p.setPen(pen(BLUE, 2.4)); p.drawLine(QPointF(35, 20), QPointF(35, 36)); p.drawLine(QPointF(32, 20), QPointF(38, 20)); p.drawLine(QPointF(32, 36), QPointF(38, 36))

@@ -482,7 +482,7 @@ class StudioWindow(QMainWindow):
 
     def _build_panels(self):
         # --- wyciągnięcie: panel opcji + górny pasek ---
-        self.ex_panel, lay = self._panel(312, 'Wyciągnięcie', 'extrude' if False else 'one', 'Profil lub ściana → bryła')
+        self.ex_panel, lay = self._panel(312, 'Wyciągnięcie', 'x_extrude', 'Profil lub ściana → bryła', plain=True)
         lay.setSpacing(11)
         self.ex_op = ui.Segmented([('Nowa', 'new', 'new'), ('Połącz', 'join', 'join'), ('Wytnij', 'cut', 'cut'), ('Wspólna', 'intersect', 'intersect')], 32)
         self._field(lay, 'Operacja', self.ex_op)
@@ -522,7 +522,7 @@ class StudioWindow(QMainWindow):
         self.ex_second.hide()
 
         # --- boolean ---
-        self.bool_panel, lay = self._panel(312, 'Boolean / CSG', 'union', 'Łączenie, odejmowanie, część wspólna', icons_green)
+        self.bool_panel, lay = self._panel(312, 'Boolean / CSG', 'x_bool', 'Łączenie, odejmowanie, część wspólna', plain=True)
         self.bool_op = ui.Segmented([('Suma', 'union', 'union'), ('Różnica', 'subtract', 'subtract'), ('Część wspólna', 'intersect', 'common')], 36)
         self._field(lay, 'Operacja', self.bool_op)
         self.bool_status = _label('', 'status')
@@ -533,7 +533,7 @@ class StudioWindow(QMainWindow):
         self.bool_op.currentIndexChanged.connect(lambda *_: self._timers['bool'].start())
 
         # --- edytuj bryłę ---
-        self.mod_panel, lay = self._panel(312, 'Edytuj bryłę', 'fillet', 'Zaokrąglenie i fazowanie krawędzi', icons_orange)
+        self.mod_panel, lay = self._panel(312, 'Edytuj bryłę', 'x_mod', 'Zaokrąglenie i fazowanie krawędzi', plain=True)
         self.mod_kind = ui.Segmented([('Zaokrąglij', 'fillet', 'fillet'), ('Fazuj', 'chamfer', 'chamfer')], 36)
         self._field(lay, 'Operacja', self.mod_kind)
         self.mod_label = _label('Promień zaokrąglenia (mm)')
@@ -547,9 +547,9 @@ class StudioWindow(QMainWindow):
         self.mod_kind.currentIndexChanged.connect(self._mod_kind_changed)
 
         # --- odbicie lustrzane ---
-        self.mir_panel, lay = self._panel(312, 'Odbicie lustrzane', 'mirror', 'Obiekt → ściana-lustro', icons_green)
-        self.mir_step1 = ui.StepRow(1, 'mirror', 'Obiekt do odbicia')
-        self.mir_step2 = ui.StepRow(2, 'sym', 'Ściana-lustro')
+        self.mir_panel, lay = self._panel(312, 'Odbicie lustrzane', 'mirror', 'Obiekt → ściana-lustro', plain=True)
+        self.mir_step1 = ui.StepRow(1, 'x_object', 'Obiekt do odbicia', plain=True)
+        self.mir_step2 = ui.StepRow(2, 'x_wall', 'Ściana-lustro', plain=True)
         lay.addWidget(self.mir_step1)
         lay.addWidget(self.mir_step2)
         self.mir_keep = QCheckBox('Zachowaj oryginał (kopia)')
