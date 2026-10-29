@@ -166,8 +166,8 @@ class StudioTests(unittest.TestCase):
         self.assertEqual((len(w.mod_vertices[a.id]),w.edges),(1,{}));self.assertTrue(w.view.handles);self.assertEqual(len(w.view.sel_vertices),1)
         w.mod_size.setValue(3);w.update_mod_preview();self.preview();self.assertTrue(w.view.preview_items)
         w.apply_mod();self.wait();self.assertLess(w.document.bodies[0].shape.Volume(),8000);self.assertGreater(w.document.bodies[0].shape.Volume(),7990)
-        a=w.document.bodies[0];w.set_mode('mod')
-        with patch.object(w.view,'pick_face',return_value=(a.id,[0,0,1],pt.tolist())):w.view_double_clicked(5,5)
+        a=w.document.bodies[0];w.set_mode('mod');far=max((np.array(e[0],float) for e in a.mesh.edges.values()),key=lambda q:float(np.linalg.norm(q-pt)))
+        with patch.object(w.view,'pick_face',return_value=(a.id,[0,0,1],far.tolist())):w.view_double_clicked(5,5)
         self.assertEqual(w.mod_vertices,{});self.assertGreaterEqual(len(w.edges[a.id]),4);self.assertTrue(w.view.selection_items)
 
     def test_chamfer(self):
