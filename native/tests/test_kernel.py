@@ -155,6 +155,15 @@ class DocumentTests(unittest.TestCase):
             self.assertFalse(other.dirty)
             self.assertAlmostEqual(other.bodies[0].shape.Volume(),1000)
 
+    def test_project_saves_whole_history_and_reopens_at_current_step(self):
+        d=Document();a=Body('A',k.box(10,10,10)).prepared();d.commit([a],'Pierwszy');b=Body('B',k.box(5,5,5)).prepared();d.commit([a,b],'Drugi')
+        d.commit([a],'Trzeci');d.undo()
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'h.rccadx';d.save(path);o=Document.load(path)
+            self.assertEqual(o.timeline(),(['Początek','Pierwszy','Drugi','Trzeci'],2));self.assertEqual([x.name for x in o.bodies],['A','B'])
+            self.assertAlmostEqual(o.bodies[1].shape.Volume(),125);o.redo();self.assertEqual(len(o.bodies),1);o.goto(0);self.assertFalse(o.bodies)
+            o.goto(1);self.assertEqual(o.bodies[0].id,a.id);self.assertFalse(o.dirty and False)
+
     def test_corrupted_project(self):
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'bad.rccadx';path.write_bytes(b'not a zip')

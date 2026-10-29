@@ -108,26 +108,42 @@ class Document:
         while current < index:
             self.redo(); current += 1
 
+    @staticmethod
+    def _entry(body, shape_index):
+        entry = dict(id=body.id, name=body.name, kind=body.kind, plane=body.plane, visible=body.visible, shape=shape_index)
+        if body.meta:
+            entry['meta'] = body.meta
+        if isinstance(body.plane, Frame):
+            entry['plane'] = 'CUSTOM'
+            entry['frame'] = body.plane.to_dict()
+        return entry
+
     def save(self, path):
+        """Zapisuje cały projekt razem z historią: każda unikalna geometria raz (BREP), a kroki jako listy odwołań do niej."""
         path = Path(path)
-        manifest = {"app": "RCCAD_DESKTOP", "version": 1, "units": "mm", "bodies": []}
+        older = [(e[0], e[2]) for e in self._undo]
+        newer = [(e[0], e[2]) for e in reversed(self._redo)]
+        states = [*older, (self.bodies, self.label), *newer]
+        shapes, index = [], {}
+        manifest = {"app": "RCCAD_DESKTOP", "version": 2, "units": "mm", "shapes": [], "states": [], "current": len(older)}
         temp_path = None
         try:
             fd, temp_path = tempfile.mkstemp(prefix=".rccad-", suffix=".tmp", dir=path.parent)
             os.close(fd)
             with tempfile.TemporaryDirectory(prefix="rccad-brep-") as work, ZipFile(temp_path, "w", ZIP_DEFLATED) as archive:
-                for body in self.bodies:
-                    source = Path(work) / f"{body.id}.brep"
-                    cq.exporters.export(body.shape, str(source), exportType="BREP")
-                    member = f"bodies/{body.id}.brep"
-                    archive.write(source, member)
-                    entry = dict(id=body.id, name=body.name, kind=body.kind, plane=body.plane, visible=body.visible, file=member)
-                    if body.meta:
-                        entry['meta'] = body.meta
-                    if isinstance(body.plane, Frame):
-                        entry['plane'] = 'CUSTOM'
-                        entry['frame'] = body.plane.to_dict()
-                    manifest['bodies'].append(entry)
+                for bodies, label in states:
+                    entries = []
+                    for body in bodies:
+                        key = id(body.shape)
+                        if key not in index:
+                            index[key] = len(shapes)
+                            shapes.append(body.shape)
+                            source = Path(work) / f"s{index[key]}.brep"
+                            cq.exporters.export(body.shape, str(source), exportType="BREP")
+                            archive.write(source, f"shapes/{index[key]}.brep")
+                            manifest['shapes'].append(f"shapes/{index[key]}.brep")
+                        entries.append(self._entry(body, index[key]))
+                    manifest['states'].append(dict(label=label, bodies=entries))
                 archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False))
             os.replace(temp_path, path)
             self.path = path
@@ -136,39 +152,86 @@ class Document:
             if temp_path and Path(temp_path).exists():
                 Path(temp_path).unlink()
 
+    @staticmethod
+    def _parse_body(item, shape, mesh):
+        identifier = str(item['id'])
+        if not re.fullmatch('[0-9a-f]{32}', identifier):
+            raise CadError("Nieprawidłowa struktura projektu.")
+        kind = item.get('kind', 'solid')
+        plane = item.get('plane', 'XY')
+        if plane == 'CUSTOM' and kind == 'sketch':
+            plane = Frame.from_dict(item['frame'])
+        if kind not in ('solid', 'mesh', 'sketch') or not (isinstance(plane, Frame) or plane in ('XY', 'XZ', 'YZ')):
+            raise CadError("Nieprawidłowy typ obiektu lub płaszczyzna.")
+        meta = item.get('meta')
+        return Body(str(item['name']), shape, kind, plane, identifier, bool(item.get('visible', True)), mesh=mesh,
+                    meta=meta if isinstance(meta, dict) else None)
+
     @classmethod
     def load(cls, path):
         result = cls()
         try:
             with ZipFile(path) as archive, tempfile.TemporaryDirectory(prefix="rccad-open-") as work:
                 infos = archive.infolist()
-                if len(infos) > 2001 or sum(i.file_size for i in infos) > 2_000_000_000:
+                if len(infos) > 3001 or sum(i.file_size for i in infos) > 2_000_000_000:
                     raise CadError("Projekt jest zbyt duży.")
-                if archive.getinfo("manifest.json").file_size > 2_000_000:
+                if archive.getinfo("manifest.json").file_size > 20_000_000:
                     raise CadError("Nieprawidłowy manifest projektu.")
                 manifest = json.loads(archive.read("manifest.json"))
-                if manifest.get('app') != 'RCCAD_DESKTOP' or manifest.get('version') != 1 or not isinstance(manifest.get('bodies'), list):
+                if manifest.get('app') != 'RCCAD_DESKTOP' or manifest.get('version') not in (1, 2):
                     raise CadError("To nie jest obsługiwany projekt RCCAD Desktop.")
-                bodies, ids = [], set()
-                for item in manifest['bodies']:
-                    identifier = str(item['id'])
-                    if not re.fullmatch('[0-9a-f]{32}', identifier) or identifier in ids or item['file'] != f'bodies/{identifier}.brep':
+                if manifest['version'] == 1:
+                    if not isinstance(manifest.get('bodies'), list):
+                        raise CadError("To nie jest obsługiwany projekt RCCAD Desktop.")
+                    bodies, ids = [], set()
+                    for item in manifest['bodies']:
+                        identifier = str(item['id'])
+                        if not re.fullmatch('[0-9a-f]{32}', identifier) or identifier in ids or item['file'] != f'bodies/{identifier}.brep':
+                            raise CadError("Nieprawidłowa struktura projektu.")
+                        ids.add(identifier)
+                        source = Path(work) / (identifier + '.brep')
+                        source.write_bytes(archive.read(item['file']))
+                        shape = cq.importers.importBrep(str(source)).val()
+                        valid(shape, item.get('kind', 'solid') == 'solid')
+                        bodies.append(cls._parse_body(item, shape, None).prepared())
+                    result.bodies = tuple(bodies)
+                    result.path = Path(path)
+                    return result
+                files, states = manifest.get('shapes'), manifest.get('states')
+                current = manifest.get('current')
+                if not isinstance(files, list) or not isinstance(states, list) or not states or len(states) > 1000 or not isinstance(current, int) or not 0 <= current < len(states):
+                    raise CadError("Nieprawidłowa struktura projektu.")
+                cache = {}      # numer geometrii -> (kształt, siatka): wczytywane i siatkowane raz, współdzielone przez wszystkie kroki
+
+                def geometry(number, kind):
+                    if not isinstance(number, int) or not 0 <= number < len(files) or files[number] != f'shapes/{number}.brep':
                         raise CadError("Nieprawidłowa struktura projektu.")
-                    kind = item.get('kind', 'solid')
-                    plane = item.get('plane', 'XY')
-                    if plane == 'CUSTOM' and kind == 'sketch':
-                        plane = Frame.from_dict(item['frame'])
-                    if kind not in ('solid', 'mesh', 'sketch') or not (isinstance(plane, Frame) or plane in ('XY', 'XZ', 'YZ')):
-                        raise CadError("Nieprawidłowy typ obiektu lub płaszczyzna.")
-                    ids.add(identifier)
-                    source = Path(work) / (identifier + '.brep')
-                    source.write_bytes(archive.read(item['file']))
-                    shape = cq.importers.importBrep(str(source)).val()
-                    valid(shape, kind == 'solid')
-                    meta = item.get('meta')
-                    bodies.append(Body(str(item['name']), shape, kind, plane, identifier, bool(item.get('visible', True)),
-                                       meta=meta if isinstance(meta, dict) else None).prepared())
-                result.bodies = tuple(bodies)
+                    if number not in cache:
+                        source = Path(work) / f'{number}.brep'
+                        source.write_bytes(archive.read(files[number]))
+                        shape = cq.importers.importBrep(str(source)).val()
+                        valid(shape, kind == 'solid')
+                        cache[number] = (shape, display_mesh(shape))
+                    return cache[number]
+
+                built = []
+                for state in states:
+                    ids, bodies = set(), []
+                    for item in state['bodies']:
+                        shape, mesh = geometry(item['shape'], item.get('kind', 'solid'))
+                        body = cls._parse_body(item, shape, mesh)
+                        if body.id in ids:
+                            raise CadError("Nieprawidłowa struktura projektu.")
+                        ids.add(body.id)
+                        bodies.append(body)
+                    built.append((tuple(bodies), str(state.get('label', 'Zmiana'))))
+                result._next_revision = 1
+                revisions = list(range(1, len(built) + 1))
+                result._next_revision = len(built) + 1
+                result._undo = [(b, revisions[i], lab) for i, (b, lab) in enumerate(built[:current])]
+                result.bodies, result.label = built[current]
+                result._revision = result._saved_revision = revisions[current]
+                result._redo = [(b, revisions[i], lab) for i, (b, lab) in reversed(list(enumerate(built))[current + 1:])]
                 result.path = Path(path)
                 return result
         except CadError:
