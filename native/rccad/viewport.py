@@ -277,6 +277,19 @@ class OffsetMesh(gl.GLMeshItem):
             GL.glDisable(GL.GL_POLYGON_OFFSET_FILL)
 
 
+def _segments(chains):
+    """Wiele łamanych -> jedna tablica odcinków (tryb 'lines'): jedno wywołanie rysowania zamiast setek (płynny obrót modelu z tekstem)."""
+    parts = []
+    for pts in chains:
+        pts = np.asarray(pts, dtype=np.float32)
+        if len(pts) < 2:
+            continue
+        seg = np.empty((2 * (len(pts) - 1), 3), dtype=np.float32)
+        seg[0::2], seg[1::2] = pts[:-1], pts[1:]
+        parts.append(seg)
+    return np.concatenate(parts) if parts else None
+
+
 class CadView(gl.GLViewWidget):
     edgeClicked = Signal(str, int, bool, bool)  # bryła, krawędź, dodaj do zaznaczenia, cały łańcuch styczny
     planeClicked = Signal(str)
@@ -518,10 +531,12 @@ class CadView(gl.GLViewWidget):
                     item.setGLOptions('translucent' if self.xray else 'opaque')
                     self.addItem(item)
                     items.append(item)
-                for index, points in mesh.edges.items():
-                    hot = index in sel or picked
-                    base = SKETCH_COLOR if body.kind == 'sketch' else EDGE_COLOR
-                    line = gl.GLLinePlotItem(pos=points, color=PREVIEW_COLOR if hot else base, width=3.5 if hot else (2.3 if body.kind == 'sketch' else 1.5), antialias=True)
+                base = SKETCH_COLOR if body.kind == 'sketch' else EDGE_COLOR
+                for hot, color_, width_ in ((False, base, 2.3 if body.kind == 'sketch' else 1.5), (True, PREVIEW_COLOR, 3.5)):
+                    seg = _segments([pts for index, pts in mesh.edges.items() if (index in sel or picked) == hot])
+                    if seg is None:
+                        continue
+                    line = gl.GLLinePlotItem(pos=seg, color=color_, width=width_, antialias=True, mode='lines')
                     if body.kind != 'sketch':
                         line.setGLOptions('additive' if self.xray else 'translucent')
                     self.addItem(line)
@@ -712,6 +727,20 @@ class CadView(gl.GLViewWidget):
             item.setTransform(mat)
         self.update()
 
+    def transform_preview_uv(self, plane, a0, a1, factor, angle_deg):
+        """Natychmiastowe przekształcenie podglądu w płaszczyźnie szkicu (podobieństwo: obrót + skala wokół a0, potem przesunięcie do a1) - bez liczenia geometrii."""
+        f = kernel.frame_of(plane)
+        B = np.array([f.xdir, f.ydir, f.normal], float).T
+        o = np.array(f.origin, float)
+        c, sn = math.cos(math.radians(angle_deg)), math.sin(math.radians(angle_deg))
+        L = np.array([[factor * c, -factor * sn, 0], [factor * sn, factor * c, 0], [0, 0, 1]], float)
+        M = B @ L @ B.T
+        t = o - M @ o + B @ (np.array([a1[0], a1[1], 0.0]) - L @ np.array([a0[0], a0[1], 0.0]))
+        mat = QMatrix4x4(M[0, 0], M[0, 1], M[0, 2], t[0], M[1, 0], M[1, 1], M[1, 2], t[1], M[2, 0], M[2, 1], M[2, 2], t[2], 0, 0, 0, 1)
+        for item in self.preview_items:
+            item.setTransform(mat)
+        self.update()
+
     def set_preview_mesh(self, mesh, color=(.25, .55, .95, .55), line_color=(.1, .25, .5, 1), width=1.5, dashed=False):
         for item in self.preview_items:
             self.removeItem(item)
@@ -722,14 +751,13 @@ class CadView(gl.GLViewWidget):
                 item.setGLOptions('translucent')
                 self.addItem(item)
                 self.preview_items.append(item)
-            for points in mesh.edges.values():
-                if dashed:
-                    seg = self._dashed(points)
-                    if seg is None:
-                        continue
-                    line = gl.GLLinePlotItem(pos=seg, color=line_color, width=width, antialias=True, mode='lines')
-                else:
-                    line = gl.GLLinePlotItem(pos=points, color=line_color, width=width, antialias=True)
+            if dashed:
+                chains = [self._dashed(points) for points in mesh.edges.values()]
+                seg = np.concatenate([c for c in chains if c is not None]) if any(c is not None for c in chains) else None
+            else:
+                seg = _segments(mesh.edges.values())
+            if seg is not None:
+                line = gl.GLLinePlotItem(pos=seg, color=line_color, width=width, antialias=True, mode='lines')
                 self.addItem(line)
                 self.preview_items.append(line)
         self.update()
@@ -747,8 +775,9 @@ class CadView(gl.GLViewWidget):
                 item.setGLOptions('translucent')
                 self.addItem(item)
                 self.selection_items.append(item)
-            for points in mesh.edges.values():
-                line = gl.GLLinePlotItem(pos=points, color=line_color, width=3.2, antialias=True)
+            seg = _segments(mesh.edges.values())
+            if seg is not None:
+                line = gl.GLLinePlotItem(pos=seg, color=line_color, width=3.2, antialias=True, mode='lines')
                 self.addItem(line)
                 self.selection_items.append(line)
         self.update()

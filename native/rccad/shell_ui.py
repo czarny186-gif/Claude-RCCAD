@@ -41,6 +41,10 @@ QToolButton#shapeExpand:hover { background:#e9f3ff; color:#17314a; }
 QToolButton#padTool { background:#fff; border:1px solid #bdccdb; border-radius:8px; color:#344e69; font-size:14px; font-weight:600; }
 QToolButton#padTool:hover { border-color:#187ac1; }
 QToolButton#padTool:checked { background:#2f87e8; color:#fff; border-color:#2f87e8; }
+QPushButton#chip { background:#fff; border:1px solid #bdccdb; border-radius:8px; color:#344e69; font-size:15px; font-weight:700; min-width:58px; min-height:34px; padding:0 6px; }
+QPushButton#chip:hover { border-color:#187ac1; }
+QPushButton#chip:checked { background:#2f87e8; color:#fff; border-color:#2f87e8; }
+QPushButton#chip:disabled { background:#eef2f6; color:#a9b9c8; border-color:#d6e0ea; }
 QToolButton#cubeX, QToolButton#cubeY, QToolButton#cubeZ, QToolButton#cubeI { border:1px solid transparent; border-radius:18px; color:#fff; font-weight:700; font-size:12px; }
 QToolButton#cubeX { background:#dc5658; } QToolButton#cubeY { background:#39a56d; } QToolButton#cubeZ { background:#4589e7; } QToolButton#cubeI { background:#677e99; }
 QToolButton#cubeX:hover, QToolButton#cubeY:hover, QToolButton#cubeZ:hover, QToolButton#cubeI:hover { border:1px solid #fff; }
@@ -432,6 +436,7 @@ class StepRow(QFrame):
         self.title = QLabel(title)
         self.title.setStyleSheet('font-weight:700;color:#27415a;')
         self.value = QLabel('')
+        self.value.setWordWrap(True)
         self.value.setStyleSheet('color:#6c869b;')
         col.addWidget(self.title)
         col.addWidget(self.value)

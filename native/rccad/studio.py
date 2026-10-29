@@ -5,7 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 import numpy as np
 from PySide6.QtCore import QEvent, QObject, QPoint, QRunnable, QSize, Qt, QThreadPool, QTimer, Signal
-from PySide6.QtGui import QCursor, QIcon, QKeySequence, QMatrix4x4, QShortcut
+from PySide6.QtGui import QCursor, QFont, QFontDatabase, QIcon, QKeySequence, QMatrix4x4, QShortcut
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFontComboBox, QDoubleSpinBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
                                QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QToolButton, QVBoxLayout, QWidget)
 from . import kernel
@@ -580,18 +580,26 @@ class StudioWindow(QMainWindow):
         self._field(form, '3. Treść', self.text_edit)
         self.text_font = QFontComboBox()
         self.text_font.setEditable(False)
+        self.text_font.setFontFilters(QFontComboBox.ScalableFonts)
         self.text_font.setMaxVisibleItems(18)
-        for name in ('Arial', 'Segoe UI', 'DejaVu Sans'):
-            if name in [self.text_font.itemText(i) for i in range(self.text_font.count())]:
-                self.text_font.setCurrentText(name)
+        for name in ('Arial', 'Segoe UI', 'Calibri', 'DejaVu Sans'):
+            if name in QFontDatabase.families():
+                self.text_font.setCurrentFont(QFont(name))
                 break
         self._field(form, 'Czcionka (zainstalowane w systemie)', self.text_font)
+        form.addWidget(_label('Styl'))
         style_row = QHBoxLayout()
-        self.text_bold = QCheckBox('Pogrubiona')
-        self.text_italic = QCheckBox('Pochylona')
-        self.text_caps = QCheckBox('WERSALIKI')
-        for box in (self.text_bold, self.text_italic, self.text_caps):
-            style_row.addWidget(box)
+        style_row.setSpacing(8)
+        self.text_bold, self.text_italic, self.text_caps = (QPushButton(t) for t in ('B', 'I', 'AA'))
+        for chip, tip in ((self.text_bold, 'Pogrubienie'), (self.text_italic, 'Pochylenie'), (self.text_caps, 'WERSALIKI')):
+            chip.setObjectName('chip')
+            chip.setCheckable(True)
+            chip.setToolTip(tip)
+            chip.setCursor(Qt.PointingHandCursor)
+            style_row.addWidget(chip)
+        style_row.addStretch(1)
+        self.text_bold.setStyleSheet('font-weight:900;')
+        self.text_italic.setStyleSheet('font-style:italic;font-family:serif;')
         form.addLayout(style_row)
         row = QHBoxLayout()
         row.setSpacing(8)
@@ -1021,7 +1029,7 @@ class StudioWindow(QMainWindow):
         self.view.setCursor(Qt.PointingHandCursor if stage == 'surface' else Qt.CrossCursor)
         label = self._plane_label()
         if stage == 'surface':
-            self.txt_step1.set_state('active', 'Kliknij płaszczyznę lub ścianę bryły')
+            self.txt_step1.set_state('active', 'Kliknij płaszczyznę lub ścianę')
             self.txt_step2.set_state('pending', '')
         elif stage == 'area':
             self.txt_step1.set_state('done', f'Płaszczyzna {label}')
@@ -1171,12 +1179,16 @@ class StudioWindow(QMainWindow):
                 ang = (drag['angle0'] + ang + 180.0) % 360.0 - 180.0
                 t['angle'] = round(ang, 1)
             self._text_sync_spins()
-            self._text_refresh()
+            self.view.transform_preview_uv(plane, a0, t['anchor'], t['size'] / drag['size0'], t['angle'] - drag['angle0'])   # płynnie: tylko macierz
+            self.view.sketch_box = self._text_box_world()
+            self.view.update()
             return True
         if kind == 'release':
             t['drag'] = None
             if drag['kind'] == 'area':
                 self._text_area_done(drag['uv0'], drag.get('uv1', drag['uv0']))
+            else:
+                self._text_refresh()   # dokładna geometria po puszczeniu przycisku
             return True
         return True
 
