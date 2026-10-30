@@ -190,6 +190,7 @@ class DocumentTests(unittest.TestCase):
         mid=out[3][0];self.assertLess({b.id:b for b in mid}[a.id].shape.Volume(),2000)     # krok fazowania przeliczony na szerszej bryle
 
     def test_history_references_survive_resizing_of_the_base_body(self):
+        import numpy as np
         from dataclasses import replace as rep
         from rccad import history as h
         a=Body('A',k.box(10,10,10)).prepared();xmin,ymin=k.bounds(a.shape).xmin,k.bounds(a.shape).ymin
@@ -200,7 +201,7 @@ class DocumentTests(unittest.TestCase):
         r_mod=dict(type='mod',id=a.id,kind='chamfer',size=1,verts=[],edges=h.edge_refs(a.shape,[idx]))
         corner=np.array([k.bounds(a.shape).xmax,k.bounds(a.shape).ymax,k.bounds(a.shape).zmax])
         r_vtx=dict(type='mod',id=a.id,kind='chamfer',size=2,verts=[corner.tolist()],vrefs=h.vertex_refs(a.shape,[corner]),edges=[])
-        steps=[((),(a,))];states=[((),{'label':'P','icon':'start'}),((a,),{'label':'A','icon':'file'})]
+        states=[((),{'label':'P','icon':'start'}),((a,),{'label':'A','icon':'file'})]
         for r in (r_ext,r_mod,r_vtx):states.append((h.run_recipe(states[-1][0],r),{'label':r['type'],'icon':r['type'],'op':r}))
         tall=rep(a,shape=k.box(10,10,20),mesh=None).prepared()
         out,failed=h.recompute(states,1,(tall,));self.assertEqual(failed,0)
