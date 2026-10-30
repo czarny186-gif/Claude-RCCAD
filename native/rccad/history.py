@@ -156,6 +156,20 @@ def match_face(shape, ref):
     return best[1], best[2]
 
 
+_NS = uuid.UUID('6f1c1a52-8b3e-4b77-9d6a-2c1f5e0a7b11')
+
+
+def stable_id(seed, index):
+    """Powtarzalny identyfikator (32 znaki hex) wynikający z ziarna kroku i numeru elementu - przeliczenie historii daje te same id."""
+    return uuid.uuid5(_NS, f'{seed}:{index}').hex
+
+
+def pad_ids(ids, count, seed):
+    """Uzupełnia listę identyfikatorów wyników kroku do `count`: z ziarna, jeśli jest (powtarzalnie), inaczej losowo."""
+    ids = list(ids)
+    return ids + [stable_id(seed, i) if seed else uuid.uuid4().hex for i in range(len(ids), count)]
+
+
 def new_text_group():
     """Znacznik grupy liter jednego napisu: 24 znaki hex, na pozycji 12 zawsze 'f' (zwykłe identyfikatory uuid4 mają tam '4')."""
     raw = uuid.uuid4().hex[:24]
@@ -292,7 +306,8 @@ def combine(existing, tools, op, spent=(), ids=()):
     """Nowe bryły albo operacja logiczna narzędzi z bryłami; użyte szkice wygasają."""
     fade = lambda bodies: [replace(b, visible=False) if b.id in spent else b for b in bodies]
     if op == 'new':
-        return fade([*existing, *[Body('Wyciągnięcie', t, id=(ids[i] if i < len(ids) else uuid.uuid4().hex)).prepared() for i, t in enumerate(tools)]])
+        ids2 = pad_ids(ids, len(tools), list(ids)[0] if ids else None)
+        return fade([*existing, *[Body('Wyciągnięcie', t, id=ids2[i]).prepared() for i, t in enumerate(tools)]])
     bodies, used = list(existing), False
     for tool in tools:
         box = kernel.bounds(tool)
@@ -367,8 +382,7 @@ def run_pattern(bodies, recipe):
     if recipe.get('join') and body.kind == 'solid':
         merged = kernel.boolean('union', source, copies) if copies else source
         return _replace(bodies, body.changed(merged))
-    out = list(recipe.get('out', ()))
-    out += [uuid.uuid4().hex for _ in range(len(copies) - len(out))]
+    out = pad_ids(recipe.get('out', ()), len(copies), (recipe.get('out') or [body.id])[0])
     made = [Body(f'{body.name} — szyk {i + 1}', sh, body.kind, body.plane, id=out[i]).prepared() for i, sh in enumerate(copies)]
     current = _replace(bodies, body.changed(source)) if moved else list(bodies)
     return [*current, *made]
@@ -487,7 +501,7 @@ def run_text(bodies, recipe):
     if group:      # identyfikatory liter wynikają z grupy napisu, więc po zmianie treści kolejne kroki nadal je znajdują
         ids = text_ids(group, len(shapes))
     else:
-        ids += [uuid.uuid4().hex for _ in range(len(shapes) - len(ids))]
+        ids = pad_ids(ids, len(shapes), ids[0] if ids else None)
     return [*bodies, *[Body(recipe['name'], sh, 'sketch', plane, id=ids[i]).prepared() for i, sh in enumerate(shapes)]]
 
 
@@ -516,9 +530,8 @@ def run_trim(bodies, recipe):
         raise kernel.CadError('Brak kawałków do przycięcia.')
     mid = np.array(recipe['mid'], float)
     index = min(range(len(pieces)), key=lambda i: float(np.linalg.norm(np.array(pieces[i].positionAt(.5).toTuple()) - mid)))
-    ids = list(recipe.get('out', ()))
     wires = kernel.trim_result(pieces, index)
-    ids += [uuid.uuid4().hex for _ in range(len(wires) - len(ids))]
+    ids = pad_ids(recipe.get('out', ()), len(wires), (recipe.get('out') or [body.id])[0])
     made = [Body(body.name, w, 'sketch', body.plane, id=ids[i]).prepared() for i, w in enumerate(wires)]
     out = []
     for b in bodies:
