@@ -6,6 +6,7 @@ from pathlib import Path
 from rccad import kernel as k, history as h
 from rccad.document import Body, Document
 
+kernel_error = k.CadError
 PTS = lambda *p: [list(x) for x in p]
 
 
@@ -215,13 +216,23 @@ class ScenarioTests(unittest.TestCase):
         self.assertEqual([x['k'] for x in specs], ['textgroup'], f'obszary={len(h._group_regions(top, letters))} materiał={len(faces)} litery={len(letters)} grupa={len(members)} specs={info}')
         sc.op(dict(type='extrude', mode='join', dir='one', d1=2.0, d2=0, profiles=specs, spent=[b.id for b in letters], out=[]), 'Napis')
         holes = []
-        for frame, u in ((k.Frame((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, -1.0, 0.0)), 20.0), (k.Frame((0.0, 30.0, 0.0), (-1.0, 0.0, 0.0), (0.0, 1.0, 0.0)), 20.0)):
+        for frame, u in ((k.Frame((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, -1.0, 0.0)), 20.0), (k.Frame((80.0, 30.0, 0.0), (-1.0, 0.0, 0.0), (0.0, 1.0, 0.0)), 20.0)):
             v = 5.0 if k.to_world(frame, u, 5.0)[2] > 0 else -5.0      # oś pionowa układu ściany może być skierowana w dół
             circle = Body('Otwór', k.sketch_shape('circle', frame, [(u, v), (u + 3.0, v)]), 'sketch', frame).prepared()
             sc.raw(lambda cur, c=circle: [*cur, c], 'Szkic otworu')
             region = h._group_regions(frame, [circle])[0]
             src = dict(kind='region', id=None, face=region, wire=region.outerWire(), plane=frame, normal=tuple(k.frame_of(frame).normal), center=region.Center().toTuple())
-            sc.op(dict(type='extrude', mode='cut', dir='one', d1=-6.0, d2=0, profiles=h.describe_profiles([src], sc.doc.bodies), spent=[circle.id], out=[]), 'Otwór')
+            cut = None
+            for depth in (-6.0, 6.0):      # kierunek wglądu zależy od orientacji układu ściany: bierzemy ten, który wchodzi w bryłę
+                recipe = dict(type='extrude', mode='cut', dir='one', d1=depth, d2=0, profiles=h.describe_profiles([src], sc.doc.bodies), spent=[circle.id], out=[])
+                try:
+                    h.run_recipe(sc.doc.bodies, recipe)
+                    cut = recipe
+                    break
+                except kernel_error:
+                    continue
+            self.assertIsNotNone(cut, f'otwór nie dotyka bryły; środek okręgu: {k.to_world(frame, u, v)}')
+            sc.op(cut, 'Otwór')
             holes.append(circle)
         solid_before = [b for b in sc.doc.bodies if b.kind == 'solid'][0].shape.Volume()
         self.assertLess(solid_before, 80 * 30 * 10 + 400)       # otwory istnieją już przed zmianą
