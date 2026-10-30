@@ -6,6 +6,7 @@ from dataclasses import replace
 import numpy as np
 import cadquery as cq
 from . import kernel
+from . import sketchmeta as sm
 from .document import Body
 
 # klucz ikony kroku -> ikona paska narzędzi (icons.pixmap('t_' + nazwa)); wartości wspólne dla wszystkich kroków historii
@@ -415,7 +416,46 @@ def diff_apply(old_prev, old_cur, new_prev):
     return [merged[i] for i in order], ok
 
 
-def rebuild(base, steps):
+def meta_shape(plane, meta):
+    t = meta['tool']
+    pts = [tuple(p) for p in meta['points']]
+    if t == 'line':
+        return kernel.polyline(plane, pts, False)
+    if t == 'arc':
+        return kernel.arc3(plane, pts)
+    if t == 'rect3':
+        return kernel.rect3(plane, pts)
+    return kernel.sketch_shape(t, plane, pts, meta.get('sides', 5))
+
+
+def apply_constraints(bodies, constraints):
+    """Więzy wymiarów: wymiar bi szkicu b = k * wymiar ai szkicu a. Brak któregoś szkicu - więz jest pomijany."""
+    if not constraints:
+        return tuple(bodies)
+    bodies = list(bodies)
+    for c in constraints:
+        index = {b.id: i for i, b in enumerate(bodies)}
+        if c['a'] not in index or c['b'] not in index:
+            continue
+        a, b = bodies[index[c['a']]], bodies[index[c['b']]]
+        if not (a.meta and b.meta and a.meta.get('tool') in sm.EDITABLE and b.meta.get('tool') in sm.EDITABLE):
+            continue
+        try:
+            driver = float(sm.values(a.meta)[c['ai']].replace(',', '.'))
+            values = [float(x.replace(',', '.')) for x in sm.values(b.meta)]
+            target = driver * float(c.get('k', 1.0))
+            if abs(values[c['bi']] - target) < 1e-6:
+                continue
+            values[c['bi']] = target
+            meta = sm.apply_values(b.meta, values)
+            shape = meta_shape(b.plane, meta)
+            bodies[index[c['b']]] = Body(b.name, shape, b.kind, b.plane, b.id, b.visible, meta=meta).prepared()
+        except Exception:
+            continue
+    return tuple(bodies)
+
+
+def rebuild(base, steps, constraints=()):
     """Wykonuje kolejno kroki na stanie `base`. steps: lista (stan_przed_oryginalny, stan_po_oryginalny, info) - dwa pierwsze służą
     krokom bez przepisu (przenoszenie różnicy). Krok wyłączony ('off') niczego nie zmienia; nieprzeliczalny dostaje 'stale'.
     Zwraca (lista (bryły, info), liczba nieprzeliczonych)."""
@@ -438,6 +478,7 @@ def rebuild(base, steps):
             failed += 1
             info['stale'] = True
             result = current
+        result = apply_constraints(result, constraints)
         out.append((result, info))
         current = result
     return out, failed
@@ -447,14 +488,15 @@ def _steps(states, indices):
     return [(states[j - 1][0], states[j][0], states[j][1]) for j in indices]
 
 
-def recompute(states, k, edited_bodies):
+def recompute(states, k, edited_bodies, constraints=()):
     """Po edycji kroku k (jego nowy wynik: edited_bodies) przelicza kolejne kroki. Zwraca (nowe stany, liczba nieprzeliczonych kroków)."""
+    edited_bodies = apply_constraints(edited_bodies, constraints)
     head = list(states[:k]) + [(tuple(edited_bodies), {key: v for key, v in states[k][1].items() if key != 'stale'})]
-    tail, failed = rebuild(edited_bodies, _steps(states, range(k + 1, len(states))))
+    tail, failed = rebuild(edited_bodies, _steps(states, range(k + 1, len(states))), constraints)
     return head + tail, failed
 
 
-def toggle_step(states, j):
+def toggle_step(states, j, constraints=()):
     """Wyłącza / włącza krok j (stan go pomija) i przelicza resztę."""
     info = dict(states[j][1])
     if info.get('off'):
@@ -462,19 +504,19 @@ def toggle_step(states, j):
     else:
         info['off'] = True
     steps = [(states[j - 1][0], states[j][0], info), *_steps(states, range(j + 1, len(states)))]
-    tail, failed = rebuild(states[j - 1][0], steps)
+    tail, failed = rebuild(states[j - 1][0], steps, constraints)
     return list(states[:j]) + tail, failed
 
 
-def delete_step(states, j):
+def delete_step(states, j, constraints=()):
     """Usuwa krok j z osi czasu i przelicza następne."""
-    tail, failed = rebuild(states[j - 1][0], _steps(states, range(j + 1, len(states))))
+    tail, failed = rebuild(states[j - 1][0], _steps(states, range(j + 1, len(states))), constraints)
     return list(states[:j]) + tail, failed
 
 
-def move_step(states, j):
+def move_step(states, j, constraints=()):
     """Zamienia miejscami kroki j i j+1 (krok j przesuwa się później) i przelicza od j."""
     steps = [(states[j][0], states[j + 1][0], states[j + 1][1]), (states[j - 1][0], states[j][0], states[j][1]),
              *_steps(states, range(j + 2, len(states)))]
-    tail, failed = rebuild(states[j - 1][0], steps)
+    tail, failed = rebuild(states[j - 1][0], steps, constraints)
     return list(states[:j]) + tail, failed

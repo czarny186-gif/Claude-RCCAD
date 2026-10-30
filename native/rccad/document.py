@@ -36,6 +36,7 @@ class Document:
         self._undo = []      # (bryły, rewizja, etykieta) stanów PRZED bieżącym
         self._redo = []
         self.info = {'label': 'Początek', 'icon': 'start'}
+        self.constraints = []   # więzy wymiarów między szkicami: {a, ai, b, bi, k} - wymiar bi szkicu b = k * wymiar ai szkicu a
         self.backup = None   # poprzednia oś czasu sprzed edycji kroku historii (do cofnięcia edycji)
         self.path: Path | None = None
         self._revision = 0
@@ -91,7 +92,7 @@ class Document:
         if op:
             info['op'] = op
         self._undo.append((self.bodies, self._revision, self.info))
-        self._undo = self._undo[-200:]
+        self._undo = self._undo[-999:]
         if self.keep_future and self._redo:
             self.deferred = (self.bodies, [(e[0], e[2]) for e in reversed(self._redo)])
         self.keep_future = False
@@ -132,15 +133,31 @@ class Document:
         """Pełna oś czasu: lista (bryły, info) od pierwszego kroku."""
         return [(e[0], e[2]) for e in self._undo] + [(self.bodies, self.info)] + [(e[0], e[2]) for e in reversed(self._redo)]
 
-    def rewrite(self, states, current):
-        """Podmienia całą oś czasu (po edycji kroku i przeliczeniu następnych); poprzednią zachowuje do cofnięcia edycji."""
-        self.backup = (self.states(), len(self._undo))
+    def rewrite(self, states, current, constraints=None):
+        """Podmienia całą oś czasu (po edycji kroku i przeliczeniu następnych); poprzednią (z więzami) zachowuje do cofnięcia edycji."""
+        self.backup = (self.states(), len(self._undo), list(self.constraints))
+        if constraints is not None:
+            self.constraints = list(constraints)
         self._set_states(states, current)
+
+    def set_info(self, index, **values):
+        """Podpis / grupa kroku (bez zmiany geometrii i bez kopii zapasowej)."""
+        states = self.states()
+        bodies, info = states[index]
+        info = dict(info)
+        for key, value in values.items():
+            if value:
+                info[key] = value
+            else:
+                info.pop(key, None)
+        states[index] = (bodies, info)
+        self._set_states(states, len(self._undo))
 
     def restore_backup(self):
         if self.backup:
-            states, current = self.backup
+            states, current, constraints = self.backup
             self.backup = None
+            self.constraints = constraints
             self._set_states(states, current)
 
     def _set_states(self, states, current):
@@ -177,7 +194,7 @@ class Document:
         states = self.states()
         older = self._undo
         shapes, index = [], {}
-        manifest = {"app": "RCCAD_DESKTOP", "version": 2, "units": "mm", "shapes": [], "states": [], "current": len(older)}
+        manifest = {"app": "RCCAD_DESKTOP", "version": 2, "units": "mm", "shapes": [], "states": [], "current": len(older), "constraints": self.constraints}
         temp_path = None
         try:
             fd, temp_path = tempfile.mkstemp(prefix=".rccad-", suffix=".tmp", dir=path.parent)
@@ -195,7 +212,7 @@ class Document:
                             archive.write(source, f"shapes/{index[key]}.brep")
                             manifest['shapes'].append(f"shapes/{index[key]}.brep")
                         entries.append(self._entry(body, index[key]))
-                    manifest['states'].append(dict(label=info.get('label', ''), icon=info.get('icon', 'move'), op=info.get('op'), stale=bool(info.get('stale')), bodies=entries))
+                    manifest['states'].append(dict(label=info.get('label', ''), icon=info.get('icon', 'move'), op=info.get('op'), stale=bool(info.get('stale')), off=bool(info.get('off')), note=info.get('note'), group=info.get('group'), bodies=entries))
                 archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False))
             os.replace(temp_path, path)
             self.path = path
@@ -251,7 +268,7 @@ class Document:
                     return result
                 files, states = manifest.get('shapes'), manifest.get('states')
                 current = manifest.get('current')
-                if not isinstance(files, list) or not isinstance(states, list) or not states or len(states) > 1000 or not isinstance(current, int) or not 0 <= current < len(states):
+                if not isinstance(files, list) or not isinstance(states, list) or not states or len(states) > 1100 or not isinstance(current, int) or not 0 <= current < len(states):
                     raise CadError("Nieprawidłowa struktura projektu.")
                 cache = {}      # numer geometrii -> (kształt, siatka): wczytywane i siatkowane raz, współdzielone przez wszystkie kroki
 
@@ -281,7 +298,15 @@ class Document:
                         info['op'] = state['op']
                     if state.get('stale'):
                         info['stale'] = True
+                    if state.get('off'):
+                        info['off'] = True
+                    for key in ('note', 'group'):
+                        if isinstance(state.get(key), str) and state[key]:
+                            info[key] = state[key][:80]
                     built.append((tuple(bodies), info))
+                cons = manifest.get('constraints', [])
+                if isinstance(cons, list):
+                    result.constraints = [dict(a=str(c['a']), ai=int(c['ai']), b=str(c['b']), bi=int(c['bi']), k=float(c.get('k', 1.0))) for c in cons if isinstance(c, dict)]
                 result._next_revision = 1
                 revisions = list(range(1, len(built) + 1))
                 result._next_revision = len(built) + 1

@@ -209,6 +209,22 @@ class DocumentTests(unittest.TestCase):
         self.assertLess(out[3][0][0].shape.Volume(),vol)                          # faza na właściwej krawędzi pionowej
         self.assertLess(out[4][0][0].shape.Volume(),out[3][0][0].shape.Volume())  # faza narożnika znalazła narożnik górnej ściany
 
+    def test_dimension_constraints_follow_and_project_keeps_notes_groups_constraints(self):
+        from dataclasses import replace as rep
+        from rccad import history as h
+        mk=lambda name,tool,pts:Body(name,k.sketch_shape(tool,'XY',pts,5),'sketch','XY',meta=dict(tool=tool,points=[list(p) for p in pts],sides=5)).prepared()
+        a=mk('Prostokąt A','rect',[(0,0),(20,10)]);b=mk('Prostokąt B','rect',[(40,0),(50,5)])
+        cons=[dict(a=a.id,ai=0,b=b.id,bi=0,k=1.0)]
+        wide=mk('Prostokąt A','rect',[(0,0),(30,10)]);wide=rep(wide,id=a.id)
+        out=h.apply_constraints((wide,b),cons);self.assertAlmostEqual(k.bounds(out[1].shape).xlen,30,3);self.assertAlmostEqual(k.bounds(out[1].shape).ylen,5,3)
+        states=[((),{'label':'P','icon':'start'}),((a,),{'label':'A','icon':'sketch'}),((a,b),{'label':'B','icon':'sketch'})]
+        new,failed=h.recompute(states,1,(wide,),cons);self.assertEqual(failed,0)
+        self.assertAlmostEqual(k.bounds({x.id:x for x in new[2][0]}[b.id].shape).xlen,30,3)         # szkic B dogonił nowy wymiar A
+        d=Document();d.commit([a],'A');d.commit([a,b],'B');d.constraints=cons;d.set_info(1,note='Pierwszy',group='Szkice')
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'c.rccadx';d.save(path);o=Document.load(path)
+            self.assertEqual(o.constraints,cons);infos=o.infos()[0];self.assertEqual((infos[1]['note'],infos[1]['group']),('Pierwszy','Szkice'))
+
     def test_corrupted_project(self):
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'bad.rccadx';path.write_bytes(b'not a zip')

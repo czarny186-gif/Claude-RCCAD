@@ -373,6 +373,12 @@ class StudioWindow(QMainWindow):
         self.hist_revert.setToolTip('Cofnij ostatnią edycję kroku (przywraca poprzednią historię)')
         self.hist_revert.clicked.connect(self.history_revert)
         hl.addWidget(self.hist_revert)
+        self.hist_compare = QPushButton('Porównaj')
+        self.hist_compare.setObjectName('chip')
+        self.hist_compare.setCheckable(True)
+        self.hist_compare.setToolTip('Po edycji kroku: pokazuje czerwonym obrysem, jak wyglądał model przed zmianą')
+        self.hist_compare.toggled.connect(lambda *_: self._hist_compare_update())
+        hl.addWidget(self.hist_compare)
         self.hist_ghost = QPushButton('Pokaż wygaszone')
         self.hist_ghost.setObjectName('chip')
         self.hist_ghost.setCheckable(True)
@@ -3171,6 +3177,7 @@ class StudioWindow(QMainWindow):
         if self.hist_ghost.isChecked():       # wygaszone szkice wracają do widoku
             bodies = [replace(b, visible=True) if (b.kind == 'sketch' and not b.visible) else b for b in bodies]
         self._hist_update()
+        self._hist_compare_update()
         if self.document.deferred and not self.busy:
             self._replay_deferred()
         self.view.set_models(bodies, self.selected, self.edges)
@@ -3188,11 +3195,25 @@ class StudioWindow(QMainWindow):
         self._hist_update()
         self._layout_overlays()
 
+    def _hist_compare_update(self):
+        """Porównanie przed / po: bryły z poprzedniej wersji historii (sprzed ostatniej edycji) jako czerwona nakładka."""
+        if self.mode is not None:
+            return
+        if not (self.hist_compare.isChecked() and self.document.backup):
+            if getattr(self, '_compare_on', False):
+                self._compare_on = False
+                self.view.set_selection_meshes(None)
+            return
+        states, current, _ = self.document.backup
+        meshes = [b.mesh for b in states[current][0] if b.kind == 'solid' and b.visible and b.mesh is not None]
+        self._compare_on = bool(meshes)
+        self.view.set_selection_meshes(meshes or None, color=(.9, .2, .2, .22), line_color=(.8, .1, .1, 1))
+
     def _hist_update(self):
         if not self.hist_bar.isVisible():
             return
         infos, current = self.document.infos()
-        sig = (tuple((i.get('label'), i.get('icon'), bool(i.get('stale')), bool(i.get('off'))) for i in infos), current, bool(self.document.backup))
+        sig = (tuple((i.get('label'), i.get('icon'), bool(i.get('stale')), bool(i.get('off')), i.get('note'), i.get('group')) for i in infos), current, bool(self.document.backup))
         self.hist_revert.setEnabled(bool(self.document.backup))
         if sig == self._hist_sig:
             return
@@ -3211,11 +3232,18 @@ class StudioWindow(QMainWindow):
             chip.setCheckable(True)
             chip.setChecked(i == current)
             editable = bool(info.get('op')) or info.get('icon') == 'sketch'
-            chip.setToolTip(f"{i}. {info.get('label', '')}" + ('\nKrok wymaga poprawy (nie dało się go przeliczyć)' if info.get('stale') else '')
+            group = info.get('group')
+            if group and (i == 0 or infos[i - 1].get('group') != group):
+                tag = QLabel(group)
+                tag.setStyleSheet('color:#187ac1; font-size:11px; font-weight:700; background:transparent;')
+                self.hist_row.addWidget(tag)
+            chip.setToolTip(f"{i}. {info.get('note') or info.get('label', '')}" + (f"\n({info['label']})" if info.get('note') else '') + (f"\nGrupa: {group}" if group else '') + ('\nKrok wymaga poprawy (nie dało się go przeliczyć)' if info.get('stale') else '')
                             + ('\nDwuklik: edytuj parametry' if editable else ''))
             style = []
             if i > current:      # cofnięte kroki: przerywany obrys, można do nich wrócić
                 style.append('border-style:dashed; border-color:#9fb2c4;')
+            if group:
+                style.append('border-top:3px solid #187ac1;')
             if info.get('off'):      # krok wyłączony: wygaszony symbol
                 style.append('background:#e6ecf2; border-style:dotted; border-color:#9fb2c4;')
                 chip.setToolTip(chip.toolTip() + '\nKrok wyłączony (pomijany)')
@@ -3249,18 +3277,33 @@ class StudioWindow(QMainWindow):
         left.setEnabled(index > 1)
         right.setEnabled(index < len(states) - 1)
         menu.addSeparator()
+        note = menu.addAction('Nazwij krok…')
+        group = menu.addAction('Grupa…')
+        menu.addSeparator()
         delete = menu.addAction('Usuń krok')
         chosen = menu.exec(pos)
         if chosen is edit:
             self.history_edit(index)
         elif chosen is off:
-            self.history_restructure(lambda st: hist.toggle_step(st, index))
+            self.history_restructure(lambda st, c: hist.toggle_step(st, index, c))
         elif chosen is left:
-            self.history_restructure(lambda st: hist.move_step(st, index - 1))
+            self.history_restructure(lambda st, c: hist.move_step(st, index - 1, c))
         elif chosen is right:
-            self.history_restructure(lambda st: hist.move_step(st, index))
+            self.history_restructure(lambda st, c: hist.move_step(st, index, c))
+        elif chosen is note:
+            from PySide6.QtWidgets import QInputDialog
+            text, ok = QInputDialog.getText(self, 'Nazwa kroku', 'Podpis kroku (puste = domyślny):', text=states[index][1].get('note', ''))
+            if ok:
+                self.document.set_info(index, note=text.strip()[:80])
+                self.refresh()
+        elif chosen is group:
+            from PySide6.QtWidgets import QInputDialog
+            text, ok = QInputDialog.getText(self, 'Grupa kroków', 'Nazwa grupy (kolejne kroki o tej samej nazwie tworzą grupę; puste = bez grupy):', text=states[index][1].get('group', ''))
+            if ok:
+                self.document.set_info(index, group=text.strip()[:40])
+                self.refresh()
         elif chosen is delete:
-            self.history_restructure(lambda st: hist.delete_step(st, index))
+            self.history_restructure(lambda st, c: hist.delete_step(st, index, c))
 
     def history_restructure(self, change):
         """Wyłączenie / usunięcie / zmiana kolejności kroku: nowa oś czasu jest przeliczana w tle, poprzednią można przywrócić strzałką."""
@@ -3277,7 +3320,8 @@ class StudioWindow(QMainWindow):
             if failed:
                 self.toast(f'{failed} kroków nie dało się przeliczyć (oznaczone na czerwono) - popraw je albo cofnij zmianę.', 7000)
 
-        self.run_operation('Przeliczanie historii', lambda: change(states), apply)
+        constraints = list(self.document.constraints)
+        self.run_operation('Przeliczanie historii', lambda: change(states, constraints), apply)
 
     def _replay_deferred(self):
         """Operacja wykonana po przeskoku w historii została wstawiona w środek: późniejsze kroki liczymy od nowa na jej wyniku (w tle)."""
@@ -3294,7 +3338,8 @@ class StudioWindow(QMainWindow):
             self.selected, self.edges = [], {}
             self.toast(f'Wstawiono krok w środek historii, {failed} kroków wymaga poprawy (czerwone).' if failed else 'Wstawiono krok w środek historii, następne kroki przeliczone.', 4500)
 
-        self.run_operation('Przeliczanie historii', lambda: hist.rebuild(current, steps), apply)
+        constraints = list(self.document.constraints)
+        self.run_operation('Przeliczanie historii', lambda: hist.rebuild(current, steps, constraints), apply)
 
     def history_revert(self):
         if self.busy or not self.document.backup:
@@ -3331,13 +3376,24 @@ class StudioWindow(QMainWindow):
                 return
             target = added[0]
             labels = sm.LABELS.get(target.meta['tool'], ())
-            edits = []
-            for caption, value in zip(labels, sm.values(target.meta)):
+            edits, links = [], []
+            drivers = [(b, i, f'{b.name}: {cap}') for b in bodies if b.kind == 'sketch' and b.id != target.id and b.meta and b.meta.get('tool') in sm.EDITABLE
+                       for i, cap in enumerate(sm.LABELS.get(b.meta['tool'], ()))]
+            for n, (caption, value) in enumerate(zip(labels, sm.values(target.meta))):
                 box = QLineEdit(value)
                 lay.addWidget(_label(caption, 'psub'))
                 lay.addWidget(box)
                 edits.append(box)
-            fields = dict(kind='sketch', target=target, edits=edits)
+                link = QComboBox()       # więz: ten wymiar zawsze równy wymiarowi innego szkicu
+                link.addItem('Wymiar niezależny', None)
+                current = next((c for c in self.document.constraints if c['b'] == target.id and c['bi'] == n), None)
+                for b, i, text in drivers:
+                    link.addItem('= ' + text, (b.id, i))
+                    if current and current['a'] == b.id and current['ai'] == i:
+                        link.setCurrentIndex(link.count() - 1)
+                lay.addWidget(link)
+                links.append(link)
+            fields = dict(kind='sketch', target=target, edits=edits, links=links)
         self._hist_fields = fields
         row = QHBoxLayout()
         for text, cb in (('Zastosuj', lambda: self._history_edit_apply(index, fields)), ('Anuluj', self.hist_edit.hide)):
@@ -3457,6 +3513,7 @@ class StudioWindow(QMainWindow):
     def _history_edit_apply(self, index, fields):
         states = self.document.states()
         bodies, info = states[index]
+        constraints = list(self.document.constraints)
         try:
             if fields['kind'] == 'recipe':
                 recipe = fields['collect']()
@@ -3472,6 +3529,10 @@ class StudioWindow(QMainWindow):
                 meta = sm.apply_values(target.meta, values)
                 shape = self._meta_shape(target.plane, meta)
                 new_info = info
+                constraints = [c for c in constraints if c['b'] != target.id]
+                for n, link in enumerate(fields['links']):
+                    if link.currentData():
+                        constraints.append(dict(a=link.currentData()[0], ai=link.currentData()[1], b=target.id, bi=n, k=1.0))
 
                 def first():
                     return tuple(replace(b, shape=shape, mesh=kernel.display_mesh(shape), meta=meta) if b.id == target.id else b for b in bodies)
@@ -3484,11 +3545,11 @@ class StudioWindow(QMainWindow):
             edited = first()
             patched = list(states)
             patched[index] = (bodies, new_info)
-            return hist.recompute(patched, index, edited)
+            return hist.recompute(patched, index, edited, constraints)
 
         def apply(result):
             new_states, failed = result
-            self.document.rewrite(new_states, len(new_states) - 1)
+            self.document.rewrite(new_states, len(new_states) - 1, constraints)
             self.selected, self.edges = [], {}
             if failed:
                 self.toast(f'{failed} kroków nie dało się przeliczyć (oznaczone na czerwono) - popraw je albo cofnij edycję.', 7000)
