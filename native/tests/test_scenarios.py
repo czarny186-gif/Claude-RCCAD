@@ -189,6 +189,51 @@ class ScenarioTests(unittest.TestCase):
             self.assertEqual(len([b for b in states[-1][0] if b.kind == 'solid']), 1)
 
 
+    def test_user_scenario_box_text_two_side_holes_then_change_text(self):
+        """Prostokąt -> bryła, napis „Radek” wyciągnięty na górze, po otworze w dwóch bocznych ścianach, powrót i zmiana napisu na „Zosia”."""
+        try:
+            k.text_shape('XY', 'AB', 0, 0, 10)
+        except Exception:
+            self.skipTest('brak czcionki w środowisku')
+        rect = sketch('Prostokąt', 'rect', [(0, 0), (80, 30)])
+        sc = Scenario()
+        sc.raw(lambda cur, r=rect: [*cur, r], 'Prostokąt')
+        box_id = h.stable_id('box', 0)
+        sc.op(dict(type='extrude', mode='new', dir='one', d1=10.0, d2=0, profiles=[{'k': 'sketch', 'id': rect.id}], spent=[rect.id], out=[box_id]), 'Bryła')
+        top = k.Frame((0.0, 0.0, 10.0), (1.0, 0.0, 0.0), (0.0, 0.0, 1.0))
+        group = h.new_text_group()
+        txt = lambda content: dict(type='text', plane=h.plane_to_json(top), name='Tekst', out=h.text_ids(group, 12),
+                                   params=dict(text=content, anchor=[5, 8], size=14.0, font='Arial', bold=False, italic=False, angle=0.0))
+        sc.op(txt('Radek'), 'Tekst')
+        letters = [b for b in sc.doc.bodies if b.kind == 'sketch']
+        faces = h.material_regions(top, letters)
+        srcs = [dict(kind='region', id=None, face=f, wire=f.outerWire(), plane=top, normal=(0, 0, 1), center=f.Center().toTuple()) for f in faces]
+        specs = h.describe_profiles(srcs, sc.doc.bodies)
+        self.assertEqual([x['k'] for x in specs], ['textgroup'], f'obszary={len(h._group_regions(top, letters))} materiał={len(faces)}')
+        sc.op(dict(type='extrude', mode='join', dir='one', d1=2.0, d2=0, profiles=specs, spent=[b.id for b in letters], out=[]), 'Napis')
+        holes = []
+        for frame, u in ((k.Frame((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, -1.0, 0.0)), 20.0), (k.Frame((0.0, 30.0, 0.0), (-1.0, 0.0, 0.0), (0.0, 1.0, 0.0)), 20.0)):
+            circle = Body('Otwór', k.sketch_shape('circle', frame, [(u, 5.0), (u + 3.0, 5.0)]), 'sketch', frame).prepared()
+            sc.raw(lambda cur, c=circle: [*cur, c], 'Szkic otworu')
+            region = h._group_regions(frame, [circle])[0]
+            src = dict(kind='region', id=None, face=region, wire=region.outerWire(), plane=frame, normal=tuple(k.frame_of(frame).normal), center=region.Center().toTuple())
+            sc.op(dict(type='extrude', mode='cut', dir='one', d1=-6.0, d2=0, profiles=h.describe_profiles([src], sc.doc.bodies), spent=[circle.id], out=[]), 'Otwór')
+            holes.append(circle)
+        solid_before = [b for b in sc.doc.bodies if b.kind == 'solid'][0].shape.Volume()
+        self.assertLess(solid_before, 80 * 30 * 10 + 400)       # otwory istnieją już przed zmianą
+        text_index = 3
+        for content in ('Zosia', 'Radek', 'I'):
+            states = self.check_edit(sc, text_index, txt(content))
+            final = states[-1][0]
+            self.assertFalse(any(b.kind == 'sketch' and b.visible for b in final), content)       # ani litery, ani szkice otworów nie zostają
+            solid = [b for b in final if b.kind == 'solid']
+            self.assertEqual(len(solid), 1, content)
+            self.assertGreater(solid[0].shape.Volume(), 0)
+            # objętość z otworami jest mniejsza niż bryła + napis bez otworów (2 x pi*3^2*6 = ok. 339 mm3 ubytku)
+            plain = [b for b in states[text_index + 1][0] if b.kind == 'solid'][0].shape.Volume()
+            self.assertAlmostEqual(plain - solid[0].shape.Volume(), 2 * 3.14159 * 9 * 6, delta=20, msg=content)
+
+
     def test_mirror_and_union_follow_base_edit(self):
         box = Body('Baza', k.box(20, 10, 10)).prepared()
         sc = Scenario()
