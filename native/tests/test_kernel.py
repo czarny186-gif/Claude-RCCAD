@@ -334,7 +334,7 @@ class DocumentTests(unittest.TestCase):
         r1=text('AB',h.text_ids(group,2));bodies=h.run_recipe((),r1)
         self.assertTrue(all(h.text_group_of(b.id)==group for b in bodies))
         self.assertEqual([b.id for b in h.run_recipe((),dict(r1,params=dict(r1['params'],text='ABC')))][:2],[b.id for b in bodies][:2])      # stałe identyfikatory po zmianie treści
-        members=[b for b in bodies];faces=h._group_regions('XY',members);self.assertTrue(faces)
+        members=[b for b in bodies];faces=h.material_regions('XY',members);self.assertTrue(faces);self.assertLessEqual(len(faces),len(h._group_regions('XY',members)))
         srcs=[dict(kind='region',id=None,face=f,wire=f.outerWire(),plane='XY',normal=(0,0,1),center=f.Center().toTuple()) for f in faces]
         specs=h.describe_profiles(srcs,bodies);self.assertEqual([x['k'] for x in specs],['textgroup'])
         ext=dict(type='extrude',mode='new',dir='one',d1=3.0,d2=0,profiles=specs,spent=[b.id for b in bodies],out=[])

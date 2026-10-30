@@ -149,7 +149,7 @@ class ScenarioTests(unittest.TestCase):
         sc.raw(lambda cur, b=box: [*cur, b], 'Płyta')
         sc.op(txt('AB'), 'Tekst')
         letters = [b for b in sc.doc.bodies if b.kind == 'sketch']
-        faces = h._group_regions('XY', letters)
+        faces = h.material_regions('XY', letters)
         srcs = [dict(kind='region', id=None, face=f, wire=f.outerWire(), plane='XY', normal=(0, 0, 1), center=f.Center().toTuple()) for f in faces]
         specs = h.describe_profiles(srcs, sc.doc.bodies)
         self.assertEqual([s['k'] for s in specs], ['textgroup'])
@@ -160,6 +160,34 @@ class ScenarioTests(unittest.TestCase):
         for content in ('ABCD', 'A'):
             states = self.check_edit(sc, 2, txt(content))
             self.assertFalse(any(b.kind == 'sketch' and b.visible for b in states[-1][0]), content)       # wszystkie litery zużyte
+
+    def test_embossed_text_on_solid_face_frame_then_edit_text(self):
+        try:
+            k.text_shape('XY', 'AB', 0, 0, 10)
+        except Exception:
+            self.skipTest('brak czcionki w środowisku')
+        box = Body('Płyta', k.box(80, 30, 10)).prepared()
+        frame = k.Frame((0.0, 0.0, 10.0), (1.0, 0.0, 0.0), (0.0, 0.0, 1.0))
+        group = h.new_text_group()
+        txt = lambda content: dict(type='text', plane=h.plane_to_json(frame), name='Tekst', out=h.text_ids(group, 2),
+                                   params=dict(text=content, anchor=[5, 5], size=12.0, font='Arial', bold=False, italic=False, angle=0.0))
+        sc = Scenario()
+        sc.raw(lambda cur, b=box: [*cur, b], 'Płyta')
+        sc.op(txt('BO'), 'Tekst')
+        letters = [b for b in sc.doc.bodies if b.kind == 'sketch']
+        all_faces = h._group_regions(frame, letters)
+        faces = h.material_regions(frame, letters)
+        self.assertLessEqual(len(faces), len(all_faces))
+        srcs = [dict(kind='region', id=None, face=f, wire=f.outerWire(), plane=frame, normal=(0, 0, 1), center=f.Center().toTuple()) for f in faces]
+        specs = h.describe_profiles(srcs, sc.doc.bodies)
+        self.assertEqual([x['k'] for x in specs], ['textgroup'], f'regions={len(all_faces)} material={len(faces)}')
+        sc.op(dict(type='extrude', mode='join', dir='one', d1=2.0, d2=0, profiles=specs, spent=[b.id for b in letters], out=[]), 'Wypukły napis')
+        sc.op(dict(type='transform', id=box.id, mode='move', v=[2.0, 1.0, 0.0]), 'Przesunięcie')
+        for content in ('BOKS', 'I'):
+            states = self.check_edit(sc, 2, txt(content))
+            self.assertFalse(any(b.kind == 'sketch' and b.visible for b in states[-1][0]), content)
+            self.assertEqual(len([b for b in states[-1][0] if b.kind == 'solid']), 1)
+
 
     def test_mirror_and_union_follow_base_edit(self):
         box = Body('Baza', k.box(20, 10, 10)).prepared()

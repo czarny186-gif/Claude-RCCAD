@@ -189,6 +189,44 @@ def _group_regions(plane, members):
     return kernel.regions(plane, [e for b in members for e in b.shape.Edges()], [b.shape for b in members if b.shape.IsClosed()])
 
 
+def _inner_point(face):
+    """Punkt leżący wewnątrz ściany (środek pierwszego trójkąta siatki) - środek ciężkości pierścienia leży poza nim."""
+    vertices, triangles = face.tessellate(0.05, 0.2)
+    if not triangles:
+        return np.array(face.Center().toTuple(), float)
+    t = triangles[0]
+    return np.mean([np.array(vertices[i].toTuple(), float) for i in t], axis=0)
+
+
+def material_regions(plane, members):
+    """Obszary napisu, które są materiałem liter (reguła parzystości): bez wnętrz otworów w literach typu A, B, O, e."""
+    faces = _group_regions(plane, members)
+    outlines = []
+    for b in members:
+        try:
+            if b.shape.IsClosed():
+                outlines.append(cq.Face.makeFromWires(b.shape))
+        except Exception:
+            continue
+    if not outlines:
+        return faces
+    material = []
+    for f in faces:
+        point = _inner_point(f)
+        depth = sum(1 for o in outlines if kernel.face_contains(o, point))
+        if depth % 2 == 1:
+            material.append(f)
+    return material or faces
+
+
+def same_face(a, b):
+    try:
+        ca, cb = np.array(a.Center().toTuple(), float), np.array(b.Center().toTuple(), float)
+        return abs(a.Area() - b.Area()) <= 1e-4 * max(a.Area(), 1e-9) and float(np.linalg.norm(ca - cb)) < 1e-3
+    except Exception:
+        return False
+
+
 def describe_profiles(profiles, bodies=()):
     """Przepis na wybrane profile wyciągnięcia (src z Studio) -> lista słowników JSON. Obszar zapamiętuje też szkic-kotwicę
     i przesunięcie względem jego środka, więc podąża za szkicem po zmianie jego wymiarów."""
@@ -220,7 +258,8 @@ def describe_profiles(profiles, bodies=()):
 
 
 def _merge_text_groups(out, profiles, bodies):
-    """Gdy wybrano WSZYSTKIE obszary napisu, krok zapamiętuje „cały napis”: po zmianie treści napisu obejmie też nowe litery."""
+    """Gdy wybrano WSZYSTKIE obszary materiału napisu (bez wnętrz otworów w literach), krok zapamiętuje „cały napis”:
+    po zmianie treści obejmie też nowe litery."""
     picked = {}
     for n, spec in enumerate(out):
         group = text_group_of((spec.get('anchor') or {}).get('id')) if spec['k'] == 'region' else None
@@ -233,8 +272,11 @@ def _merge_text_groups(out, profiles, bodies):
             plane = plane_from_json(spec['plane'])
             found = sketch_groups(bodies).get(plane_key(plane))
             members = [b for b in (found[1] if found else []) if text_group_of(b.id) == group]
-            if members and len(numbers) >= len(_group_regions(found[0], members)):
-                drop |= set(numbers)
+            material = material_regions(found[0], members) if members else []
+            faces = [profiles[n].get('face') for n in numbers]
+            covered = [f for f in material if any(g is not None and same_face(f, g) for g in faces)]
+            if material and len(covered) == len(material):
+                drop |= {n for n in numbers if profiles[n].get('face') is not None and any(same_face(f, profiles[n]['face']) for f in material)}
                 extra.append({'k': 'textgroup', 'group': group, 'plane': spec['plane']})
         except Exception:
             continue
@@ -285,7 +327,7 @@ def resolve_profiles(bodies, spec):
     members = [b for b in (found[1] if found else []) if text_group_of(b.id) == spec['group']]
     if not members:
         raise kernel.CadError('Napis użyty w tym kroku już nie istnieje.')
-    faces = _group_regions(found[0], members)
+    faces = material_regions(found[0], members)
     if not faces:
         raise kernel.CadError('Napis nie tworzy już zamkniętych obszarów.')
     return [dict(wire=f.outerWire(), normal=tuple(kernel.frame_of(found[0]).normal), plane=found[0], face=f) for f in faces]
