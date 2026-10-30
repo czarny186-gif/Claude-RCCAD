@@ -216,7 +216,8 @@ class ScenarioTests(unittest.TestCase):
         sc.op(dict(type='extrude', mode='join', dir='one', d1=2.0, d2=0, profiles=specs, spent=[b.id for b in letters], out=[]), 'Napis')
         holes = []
         for frame, u in ((k.Frame((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, -1.0, 0.0)), 20.0), (k.Frame((0.0, 30.0, 0.0), (-1.0, 0.0, 0.0), (0.0, 1.0, 0.0)), 20.0)):
-            circle = Body('Otwór', k.sketch_shape('circle', frame, [(u, 5.0), (u + 3.0, 5.0)]), 'sketch', frame).prepared()
+            v = 5.0 if k.to_world(frame, u, 5.0)[2] > 0 else -5.0      # oś pionowa układu ściany może być skierowana w dół
+            circle = Body('Otwór', k.sketch_shape('circle', frame, [(u, v), (u + 3.0, v)]), 'sketch', frame).prepared()
             sc.raw(lambda cur, c=circle: [*cur, c], 'Szkic otworu')
             region = h._group_regions(frame, [circle])[0]
             src = dict(kind='region', id=None, face=region, wire=region.outerWire(), plane=frame, normal=tuple(k.frame_of(frame).normal), center=region.Center().toTuple())
