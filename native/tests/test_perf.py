@@ -106,6 +106,22 @@ class HistoryPerf(unittest.TestCase):
             self.assertLess(t.seconds, 5)
 
 
+class MeshPerf(unittest.TestCase):
+    def test_display_mesh_profile(self):
+        import cProfile, pstats, io
+        shapes = [k.transform(k.box(10 + i, 10, 10), (i * 15, 0, 0), (0, 0, 0)) for i in range(30)]
+        profile = cProfile.Profile()
+        with Timer() as t:
+            profile.enable()
+            for sh in shapes:
+                k.display_mesh(sh)
+            profile.disable()
+        report('siatka wyswietlania jednej bryly (box)', t.seconds / 30)
+        out = io.StringIO()
+        pstats.Stats(profile, stream=out).sort_stats('tottime').print_stats(10)
+        print('PERFPROF\n' + out.getvalue(), file=sys.stderr, flush=True)
+
+
 class StudioPerf(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
