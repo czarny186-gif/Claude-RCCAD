@@ -129,19 +129,21 @@ class Document:
         states = self.states() + list(tail)
         self._set_states(states, len(states) - 1)
 
-    def undo(self):
+    def undo(self, mesh=True):
         self.keep_future = False
         if self._undo:
             self._redo.append((self.bodies, self._revision, self.info))
             self.bodies, self._revision, self.info = self._undo.pop()
-            self.bodies = self.meshed(self.bodies)
+            if mesh:
+                self.bodies = self.meshed(self.bodies)
 
-    def redo(self):
+    def redo(self, mesh=True):
         self.keep_future = False
         if self._redo:
             self._undo.append((self.bodies, self._revision, self.info))
             self.bodies, self._revision, self.info = self._redo.pop()
-            self.bodies = self.meshed(self.bodies)
+            if mesh:
+                self.bodies = self.meshed(self.bodies)
 
     # ---------- historia: oś czasu stanów (niezmienne bryły, więc przeskok jest natychmiastowy) ----------
     def timeline(self):
@@ -216,9 +218,10 @@ class Document:
         labels, current = self.timeline()
         index = max(0, min(index, len(labels) - 1))
         while current > index:
-            self.undo(); current -= 1
+            self.undo(False); current -= 1      # stany pośrednie nie są siatkowane: tylko docelowy
         while current < index:
-            self.redo(); current += 1
+            self.redo(False); current += 1
+        self.bodies = self.meshed(self.bodies)
         self.keep_future = index < len(labels) - 1
 
     @staticmethod
