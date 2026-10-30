@@ -189,6 +189,25 @@ class DocumentTests(unittest.TestCase):
         swapped,f3=h.move_step(states,3);self.assertEqual([i['icon'] for _,i in swapped[3:5]],['transform','mod'])
         mid=out[3][0];self.assertLess({b.id:b for b in mid}[a.id].shape.Volume(),2000)     # krok fazowania przeliczony na szerszej bryle
 
+    def test_history_references_survive_resizing_of_the_base_body(self):
+        from dataclasses import replace as rep
+        from rccad import history as h
+        a=Body('A',k.box(10,10,10)).prepared();xmin,ymin=k.bounds(a.shape).xmin,k.bounds(a.shape).ymin
+        face,n=k.face_at(a.shape,(0,0,1),(5,5,10))
+        src=dict(kind='face',id=a.id,face=face,normal=tuple(n),center=face.Center().toTuple(),hit=(5,5,10))
+        r_ext=dict(type='extrude',mode='join',dir='one',d1=5,d2=0,profiles=h.describe_profiles([src],[a]),spent=[],out=[])
+        idx=[i for i,e in enumerate(a.shape.Edges()) if abs(e.positionAt(.5).toTuple()[0]-xmin)<1e-6 and abs(e.positionAt(.5).toTuple()[1]-ymin)<1e-6][0]
+        r_mod=dict(type='mod',id=a.id,kind='chamfer',size=1,verts=[],edges=h.edge_refs(a.shape,[idx]))
+        corner=np.array([k.bounds(a.shape).xmax,k.bounds(a.shape).ymax,k.bounds(a.shape).zmax])
+        r_vtx=dict(type='mod',id=a.id,kind='chamfer',size=2,verts=[corner.tolist()],vrefs=h.vertex_refs(a.shape,[corner]),edges=[])
+        steps=[((),(a,))];states=[((),{'label':'P','icon':'start'}),((a,),{'label':'A','icon':'file'})]
+        for r in (r_ext,r_mod,r_vtx):states.append((h.run_recipe(states[-1][0],r),{'label':r['type'],'icon':r['type'],'op':r}))
+        tall=rep(a,shape=k.box(10,10,20),mesh=None).prepared()
+        out,failed=h.recompute(states,1,(tall,));self.assertEqual(failed,0)
+        vol=out[2][0][0].shape.Volume();self.assertAlmostEqual(vol,2500,1)         # wyciągnięcie wskazało górną ścianę wyższej bryły
+        self.assertLess(out[3][0][0].shape.Volume(),vol)                          # faza na właściwej krawędzi pionowej
+        self.assertLess(out[4][0][0].shape.Volume(),out[3][0][0].shape.Volume())  # faza narożnika znalazła narożnik górnej ściany
+
     def test_corrupted_project(self):
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'bad.rccadx';path.write_bytes(b'not a zip')

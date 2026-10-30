@@ -2335,7 +2335,7 @@ class StudioWindow(QMainWindow):
         existing = list(self.document.bodies)
         spent = self._consumed_sketches(self.ex_profiles)
         recipe = dict(type='extrude', mode=op, dir=self.ex_dir.currentData(), d1=self.ex_value.value(), d2=self.ex_second.value(),
-                      profiles=hist.describe_profiles(self.ex_profiles), spent=sorted(spent), out=[uuid.uuid4().hex for _ in makers])
+                      profiles=hist.describe_profiles(self.ex_profiles, existing), spent=sorted(spent), out=[uuid.uuid4().hex for _ in makers])
 
         def build():
             return hist.combine(existing, [m() for m in makers], op, spent, recipe['out'])
@@ -2640,7 +2640,7 @@ class StudioWindow(QMainWindow):
         body = self.document.get(bid)
         size, kind = self.mod_size.value(), self.mod_kind.currentData()
 
-        recipe = dict(type='mod', id=body.id, kind=kind, size=size, verts=[[float(c) for c in q] for q in points] if verts else [],
+        recipe = dict(type='mod', id=body.id, kind=kind, size=size, verts=[[float(c) for c in q] for q in points] if verts else [], vrefs=hist.vertex_refs(body.shape, points) if verts else [],
                       edges=[] if verts else hist.edge_refs(body.shape, ids))
 
         def apply(new):
