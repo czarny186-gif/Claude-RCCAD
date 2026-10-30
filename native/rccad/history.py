@@ -2,6 +2,7 @@
 Czysta logika bez Qt: studio podaje stany (listy Body), a tu wyliczane są nowe stany po edycji któregoś kroku."""
 from __future__ import annotations
 import ast
+import json
 import re
 import math
 import operator
@@ -155,6 +156,25 @@ def match_face(shape, ref):
     return best[1], best[2]
 
 
+def new_text_group():
+    """Znacznik grupy liter jednego napisu: 24 znaki hex, na pozycji 12 zawsze 'f' (zwykłe identyfikatory uuid4 mają tam '4')."""
+    raw = uuid.uuid4().hex[:24]
+    return raw[:12] + 'f' + raw[13:]
+
+
+def text_ids(group, count):
+    return [f'{group}{i:08x}' for i in range(count)]
+
+
+def text_group_of(identifier):
+    """Grupa napisu, do której należy szkic o danym identyfikatorze (albo None dla zwykłego szkicu)."""
+    return identifier[:24] if isinstance(identifier, str) and len(identifier) == 32 and identifier[12] == 'f' else None
+
+
+def _group_regions(plane, members):
+    return kernel.regions(plane, [e for b in members for e in b.shape.Edges()], [b.shape for b in members if b.shape.IsClosed()])
+
+
 def describe_profiles(profiles, bodies=()):
     """Przepis na wybrane profile wyciągnięcia (src z Studio) -> lista słowników JSON. Obszar zapamiętuje też szkic-kotwicę
     i przesunięcie względem jego środka, więc podąża za szkicem po zmianie jego wymiarów."""
@@ -182,7 +202,29 @@ def describe_profiles(profiles, bodies=()):
             ref = face_ref(src['face'], src['normal'], src.get('hit', src['center']), owner.shape if owner is not None else None) if src.get('face') is not None else dict(
                 normal=[float(c) for c in src['normal']], point=[float(c) for c in src.get('hit', src['center'])])
             out.append(dict(ref, k='face', id=src['id']))
-    return out
+    return _merge_text_groups(out, profiles, bodies)
+
+
+def _merge_text_groups(out, profiles, bodies):
+    """Gdy wybrano WSZYSTKIE obszary napisu, krok zapamiętuje „cały napis”: po zmianie treści napisu obejmie też nowe litery."""
+    picked = {}
+    for n, spec in enumerate(out):
+        group = text_group_of((spec.get('anchor') or {}).get('id')) if spec['k'] == 'region' else None
+        if group:
+            picked.setdefault((group, json.dumps(spec['plane'], sort_keys=True)), []).append(n)
+    drop, extra = set(), []
+    for (group, _), numbers in picked.items():
+        spec = out[numbers[0]]
+        try:
+            plane = plane_from_json(spec['plane'])
+            found = sketch_groups(bodies).get(plane_key(plane))
+            members = [b for b in (found[1] if found else []) if text_group_of(b.id) == group]
+            if members and len(numbers) >= len(_group_regions(found[0], members)):
+                drop |= set(numbers)
+                extra.append({'k': 'textgroup', 'group': group, 'plane': spec['plane']})
+        except Exception:
+            continue
+    return [x for n, x in enumerate(out) if n not in drop] + extra
 
 
 def resolve_profile(bodies, spec):
@@ -218,6 +260,21 @@ def resolve_profile(bodies, spec):
         raise kernel.CadError('Bryła użyta w tym kroku już nie istnieje.')
     face, normal = match_face(body.shape, spec)
     return dict(wire=face.outerWire(), normal=tuple(float(c) for c in normal), plane=None, face=face)
+
+
+def resolve_profiles(bodies, spec):
+    """Lista profili dla jednej pozycji przepisu (napis = wszystkie jego obszary, reszta = jeden profil)."""
+    if spec['k'] != 'textgroup':
+        return [resolve_profile(bodies, spec)]
+    plane = plane_from_json(spec['plane'])
+    found = sketch_groups(bodies).get(plane_key(plane))
+    members = [b for b in (found[1] if found else []) if text_group_of(b.id) == spec['group']]
+    if not members:
+        raise kernel.CadError('Napis użyty w tym kroku już nie istnieje.')
+    faces = _group_regions(found[0], members)
+    if not faces:
+        raise kernel.CadError('Napis nie tworzy już zamkniętych obszarów.')
+    return [dict(wire=f.outerWire(), normal=tuple(kernel.frame_of(found[0]).normal), plane=found[0], face=f) for f in faces]
 
 
 def make_tool(src, d1, d2, mode):
@@ -259,8 +316,11 @@ def combine(existing, tools, op, spent=(), ids=()):
 def run_extrude(bodies, recipe):
     """Ponownie wykonuje zapisane wyciągnięcie / wycięcie na podanym stanie."""
     mode = recipe.get('dir', 'one')
-    tools = [make_tool(resolve_profile(bodies, spec), float(recipe['d1']), float(recipe.get('d2', 0)), mode) for spec in recipe['profiles']]
-    return combine(bodies, tools, recipe['mode'], set(recipe.get('spent', ())), recipe.get('out', ()))
+    tools = [make_tool(src, float(recipe['d1']), float(recipe.get('d2', 0)), mode) for spec in recipe['profiles'] for src in resolve_profiles(bodies, spec)]
+    spent = set(recipe.get('spent', ()))
+    groups = {spec['group'] for spec in recipe['profiles'] if spec['k'] == 'textgroup'}
+    spent |= {b.id for b in bodies if text_group_of(b.id) in groups}      # wszystkie litery napisu (także nowe po zmianie treści)
+    return combine(bodies, tools, recipe['mode'], spent, recipe.get('out', ()))
 
 
 def _body(bodies, identifier):
@@ -423,7 +483,11 @@ def run_text(bodies, recipe):
     q = recipe['params']
     shapes = kernel.text_shape(plane, q['text'], *q['anchor'], size=q['size'], font=q['font'], bold=q['bold'], italic=q['italic'], angle=q['angle'])
     ids = list(recipe.get('out', ()))
-    ids += [uuid.uuid4().hex for _ in range(len(shapes) - len(ids))]
+    group = text_group_of(ids[0]) if ids else None
+    if group:      # identyfikatory liter wynikają z grupy napisu, więc po zmianie treści kolejne kroki nadal je znajdują
+        ids = text_ids(group, len(shapes))
+    else:
+        ids += [uuid.uuid4().hex for _ in range(len(shapes) - len(ids))]
     return [*bodies, *[Body(recipe['name'], sh, 'sketch', plane, id=ids[i]).prepared() for i, sh in enumerate(shapes)]]
 
 
@@ -577,7 +641,7 @@ def reads(recipe, current):
     if kind == 'extrude':
         ids = set(recipe.get('spent', ()))
         for spec in recipe['profiles']:
-            if spec['k'] == 'region':
+            if spec['k'] in ('region', 'textgroup'):
                 ids |= sketches
             else:
                 ids.add(spec['id'])

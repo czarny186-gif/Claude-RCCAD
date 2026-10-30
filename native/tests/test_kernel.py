@@ -323,6 +323,26 @@ class DocumentTests(unittest.TestCase):
         self.assertTrue(h.constraint_cycle(cons+[dict(a=b.id,ai=0,b=r.id,bi=0,k=1.0)]))
         self.assertTrue(h.constraint_cycle([dict(a=r.id,ai=0,b=r.id,bi=1,k=1.0),dict(a=r.id,ai=1,b=r.id,bi=0,k=1.0)]))
 
+    def test_text_extrusion_covers_whole_text_after_edit(self):
+        from rccad import history as h
+        try:k.text_shape('XY','AB',0,0,10)
+        except Exception:self.skipTest('brak czcionki w środowisku')
+        group=h.new_text_group();self.assertEqual(h.text_group_of(group+'00000000'),group)
+        self.assertIsNone(h.text_group_of(__import__('uuid').uuid4().hex))
+        def text(content,out):
+            return dict(type='text',plane=h.plane_to_json('XY'),name='Tekst',out=out,params=dict(text=content,anchor=[0,0],size=10.0,font='Arial',bold=False,italic=False,angle=0.0))
+        r1=text('AB',h.text_ids(group,2));bodies=h.run_recipe((),r1)
+        self.assertTrue(all(h.text_group_of(b.id)==group for b in bodies))
+        self.assertEqual([b.id for b in h.run_recipe((),dict(r1,params=dict(r1['params'],text='ABC')))][:2],[b.id for b in bodies][:2])      # stałe identyfikatory po zmianie treści
+        members=[b for b in bodies];faces=h._group_regions('XY',members);self.assertTrue(faces)
+        srcs=[dict(kind='region',id=None,face=f,wire=f.outerWire(),plane='XY',normal=(0,0,1),center=f.Center().toTuple()) for f in faces]
+        specs=h.describe_profiles(srcs,bodies);self.assertEqual([x['k'] for x in specs],['textgroup'])
+        ext=dict(type='extrude',mode='new',dir='one',d1=3.0,d2=0,profiles=specs,spent=[b.id for b in bodies],out=[])
+        before=h.run_recipe(bodies,ext);vol=lambda bs:sum(b.shape.Volume() for b in bs if b.kind=='solid')
+        longer=h.run_recipe((),dict(r1,params=dict(r1['params'],text='ABCD')))
+        after=h.run_recipe(longer,ext)
+        self.assertGreater(vol(after),vol(before));self.assertFalse(any(b.kind=='sketch' and b.visible for b in after))      # wszystkie litery (także nowe) wyciągnięte i wygaszone
+
     def test_corrupted_project(self):
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'bad.rccadx';path.write_bytes(b'not a zip')

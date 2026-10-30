@@ -1657,7 +1657,7 @@ class StudioWindow(QMainWindow):
     def create_sketch(self, shapes, label=None, meta=None, select=False, op=None):
         plane = self.sketch_plane
         name = f'{label or "Szkic"} {self._plane_label()}'
-        ids = [uuid.uuid4().hex for _ in shapes] if op else None
+        ids = (hist.text_ids(hist.new_text_group(), len(shapes)) if op.get('type') == 'text' else [uuid.uuid4().hex for _ in shapes]) if op else None
         if op:
             op = dict(op, plane=hist.plane_to_json(plane), name=name, out=ids)
         made = [replace(Body(name, sh, 'sketch', plane).prepared(), meta=meta) for sh in shapes] if select else None
