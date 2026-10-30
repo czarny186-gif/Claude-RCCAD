@@ -520,6 +520,38 @@ def _ctx(value):
     return value if isinstance(value, Context) else Context(value or ())
 
 
+def changed_ids(before, current):
+    """Identyfikatory obiektów, które różnią się między dwoma stanami (inny kształt, widoczność, nazwa albo brak po jednej stronie)."""
+    bm, cm = {b.id: b for b in before}, {b.id: b for b in current}
+    return {i for i in bm.keys() | cm.keys()
+            if i not in bm or i not in cm or bm[i].shape is not cm[i].shape or bm[i].visible != cm[i].visible or bm[i].name != cm[i].name}
+
+
+def reads(recipe, current):
+    """Zbiór obiektów, od których zależy wynik kroku (None = nie wiadomo, trzeba liczyć od nowa)."""
+    kind = recipe['type']
+    sketches = {b.id for b in current if b.kind == 'sketch'}
+    if kind == 'extrude':
+        ids = set(recipe.get('spent', ()))
+        for spec in recipe['profiles']:
+            if spec['k'] == 'region':
+                ids |= sketches
+            else:
+                ids.add(spec['id'])
+        return ids
+    if kind in ('mod', 'transform', 'mirror', 'pattern', 'sketchmeta'):
+        return {recipe['id']}
+    if kind == 'bool':
+        return {recipe['base'], *recipe['tools']}
+    if kind == 'delete':
+        return set(recipe['ids'])
+    if kind == 'trim':
+        return {recipe['id']} | sketches
+    if kind == 'text':
+        return set()
+    return None
+
+
 def run_recipe(bodies, recipe, values=None):
     if values is not None and has_expr(recipe):
         recipe = resolve(recipe, values)
