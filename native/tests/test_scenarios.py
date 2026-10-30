@@ -10,7 +10,8 @@ PTS = lambda *p: [list(x) for x in p]
 
 
 def sketch(name, tool, pts, plane='XY', ident=None):
-    body = Body(name, k.sketch_shape(tool, plane, [tuple(p) for p in pts], 5), 'sketch', plane, meta=dict(tool=tool, points=PTS(*pts), sides=5)).prepared()
+    shape = k.polyline(plane, [tuple(p) for p in pts], False) if tool == 'line' else k.sketch_shape(tool, plane, [tuple(p) for p in pts], 5)
+    body = Body(name, shape, 'sketch', plane, meta=dict(tool=tool, points=PTS(*pts), sides=5)).prepared()
     return replace(body, id=ident) if ident else body
 
 
@@ -187,6 +188,76 @@ class ScenarioTests(unittest.TestCase):
             out, failed = h.recompute(patched, 3, first, ())
             self.assertEqual(failed, 0)
             self.assertEqual(signature(out[-1][0]), signature(sc.fresh(3, new_cut)))
+
+    # ---------- dalsze scenariusze: szyk, Nożyczki, wiele profili, ściana bryły, narożniki ----------
+    def test_rect_pattern_with_step_on_a_copy_then_more_copies(self):
+        part = Body('Element', k.box(5, 5, 5)).prepared()
+        sc = Scenario()
+        sc.raw(lambda cur, b=part: [*cur, b], 'Element')
+        pat = dict(type='pattern', id=part.id, kind='rect', params=dict(counts=[3, 1, 1], spacing=[10.0, 0.0, 0.0]), join=False, out=[h.stable_id('pat', 0), h.stable_id('pat', 1)])
+        sc.op(pat, 'Szyk')
+        copy = sc.doc.bodies[1]
+        top_edge = [i for i, e in enumerate(copy.shape.Edges()) if abs(e.positionAt(.5).toTuple()[2] - 5) < 1e-6][0]
+        sc.op(dict(type='mod', id=copy.id, kind='chamfer', size=1.0, verts=[], edges=h.edge_refs(copy.shape, [top_edge])), 'Faza na kopii')
+        sc.op(dict(type='transform', id=part.id, mode='move', v=[0.0, 3.0, 0.0]), 'Przesunięcie oryginału')
+        for params in (dict(counts=[5, 1, 1], spacing=[10.0, 0.0, 0.0]), dict(counts=[3, 1, 1], spacing=[14.0, 0.0, 0.0]), dict(counts=[3, 2, 1], spacing=[10.0, 12.0, 0.0])):
+            states = self.check_edit(sc, 2, dict(pat, params=params))
+            self.assertIn(copy.id, {b.id for b in states[-1][0]})       # kopia, na której wykonano fazę, zachowała tożsamość
+
+    def test_joined_pattern_and_boolean_follow_part_resize(self):
+        part = Body('Element', k.box(5, 5, 5)).prepared()
+        plate = Body('Płyta', k.box(60, 20, 3)).prepared()
+        plate = replace(plate, shape=k.transform(plate.shape, (-5, -5, -3), (0, 0, 0))).prepared()
+        sc = Scenario()
+        sc.raw(lambda cur, b=part, p=plate: [*cur, b, p], 'Elementy')
+        sc.op(dict(type='pattern', id=part.id, kind='rect', params=dict(counts=[4, 1, 1], spacing=[10.0, 0.0, 0.0]), join=True, out=[]), 'Szyk połączony')
+        sc.op(dict(type='bool', op='union', base=plate.id, tools=[part.id], keep=False), 'Suma z płytą')
+        self.assertEqual(len([b for b in sc.doc.bodies if b.kind == 'solid']), 1)
+        self.check_edit(sc, 1, lambda cur, b=part: [replace(x, shape=k.box(7, 7, 8), mesh=None).prepared() if x.id == b.id else x for x in cur])
+
+    def test_trim_pieces_and_followup_delete_survive_sketch_edit(self):
+        a = sketch('Linia A', 'line', [(0, 0), (20, 0)])
+        b = sketch('Linia B', 'line', [(10, -10), (10, 10)])
+        sc = Scenario()
+        sc.raw(lambda cur, x=a, y=b: [*cur, x, y], 'Linie')
+        trim = dict(type='trim', id=a.id, mid=[5.0, 0.0, 0.0], out=[])
+        before = {x.id for x in sc.doc.bodies}
+        made = h.run_trim(sc.doc.bodies, trim)
+        trim['out'] = [x.id for x in made if x.id not in before]
+        sc.op(trim, 'Nożyczki')
+        survivor = trim['out'][-1]
+        sc.op(dict(type='delete', ids=[b.id]), 'Usunięcie linii B')
+        moved = lambda cur, y=b: [x if x.id != y.id else sketch(y.name, 'line', [(12, -10), (12, 10)], ident=y.id) for x in cur]
+        states = self.check_edit(sc, 1, lambda cur: cur)       # bez zmian: wynik identyczny ze świeżym
+        longer = lambda cur, x=a: [y if y.id != x.id else sketch(x.name, 'line', [(0, 0), (30, 0)], ident=x.id) for y in cur]
+        self.check_edit(sc, 1, longer)
+        self.assertTrue(survivor)
+
+    def test_extrude_two_profiles_as_new_bodies_then_boolean(self):
+        c1 = sketch('Okrąg 1', 'circle', [(0, 0), (5, 0)])
+        c2 = sketch('Okrąg 2', 'circle', [(8, 0), (13, 0)])
+        sc = Scenario()
+        sc.raw(lambda cur, x=c1, y=c2: [*cur, x, y], 'Okręgi')
+        out = [h.stable_id('ext', 0), h.stable_id('ext', 1)]
+        sc.op(dict(type='extrude', mode='new', dir='one', d1=6.0, d2=0, profiles=[{'k': 'sketch', 'id': c1.id}, {'k': 'sketch', 'id': c2.id}], spent=[c1.id, c2.id], out=out), 'Wyciągnięcie')
+        sc.op(dict(type='bool', op='union', base=out[0], tools=[out[1]], keep=False), 'Suma')
+        self.assertEqual(len([x for x in sc.doc.bodies if x.kind == 'solid']), 1)
+        bigger = lambda cur, y=c2: [x if x.id != y.id else sketch(y.name, 'circle', [(8, 0), (15, 0)], ident=y.id) for x in cur]
+        self.check_edit(sc, 1, bigger)
+
+    def test_extrude_from_solid_face_and_vertex_fillet_follow_base_resize(self):
+        box = Body('Baza', k.box(20, 20, 10)).prepared()
+        face, normal = k.face_at(box.shape, (0, 0, 1), (10, 10, 10))
+        src = dict(kind='face', id=box.id, face=face, normal=tuple(normal), center=face.Center().toTuple(), hit=(10, 10, 10))
+        sc = Scenario()
+        sc.raw(lambda cur, b=box: [*cur, b], 'Baza')
+        sc.op(dict(type='extrude', mode='join', dir='one', d1=4.0, d2=0, profiles=h.describe_profiles([src], [box]), spent=[], out=[]), 'Nadbudowa z ściany')
+        solid = sc.doc.bodies[0]
+        corner = max((v for v in solid.shape.Vertices()), key=lambda v: sum(v.toTuple()))
+        point = [float(c) for c in corner.toTuple()]
+        sc.op(dict(type='mod', id=box.id, kind='chamfer', size=1.0, verts=[point], vrefs=h.vertex_refs(solid.shape, [point]), edges=[]), 'Faza narożnika')
+        self.check_edit(sc, 1, lambda cur, b=box: [replace(x, shape=k.box(30, 25, 14), mesh=None).prepared() if x.id == b.id else x for x in cur])
+
 
     def test_ids_of_pattern_copies_are_stable_when_count_changes(self):
         ids = h.pad_ids([], 3, 'seed')
