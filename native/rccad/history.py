@@ -16,6 +16,21 @@ from .document import Body
 # klucz ikony kroku -> ikona paska narzędzi (icons.pixmap('t_' + nazwa)); wartości wspólne dla wszystkich kroków historii
 ICONS = {'start': 'history', 'sketch': 'sketch', 'extrude': 'extrude', 'cut': 'cut', 'intersect': 'bool', 'bool': 'bool', 'mod': 'mod',
          'mirror': 'mirror', 'pattern': 'pattern', 'move': 'move', 'rotate': 'rotate', 'trash': 'trash', 'file': 'file', 'text': 'text'}
+# filtr paska historii: nazwa -> zbiór kluczy ikon (None = wszystko; 'stale' obsługiwane osobno)
+FILTERS = {'Wszystkie kroki': None, 'Szkice i tekst': {'sketch', 'text'}, 'Operacje na bryłach': {'extrude', 'cut', 'intersect', 'bool'},
+           'Modyfikacje': {'mod', 'mirror', 'pattern', 'move', 'rotate', 'trash'}, 'Import': {'file'}, 'Tylko błędy': 'stale'}
+
+
+def passes_filter(info, name):
+    """Czy krok pokazuje się przy danym filtrze paska historii."""
+    allowed = FILTERS.get(name)
+    if allowed is None:
+        return True
+    if allowed == 'stale':
+        return bool(info.get('stale'))
+    return info.get('icon') in allowed
+
+
 # etykieta operacji uruchamianej przez run_operation -> klucz ikony
 LABEL_ICONS = {'Tworzenie szkicu': 'sketch', 'Nożyczki': 'sketch', 'Zmiana wymiarów szkicu': 'sketch', 'Wyciągnięcie': 'extrude',
                'Wyciągnięcie (dodaj)': 'extrude', 'Wycięcie': 'cut', 'Część wspólna': 'intersect', 'Operacja na bryłach': 'bool',

@@ -401,6 +401,7 @@ class StudioWindow(QMainWindow):
         hl.addWidget(self.hist_status)
         self._hist_job = None
         self._hist_folded = set()
+        self._hist_filter = 'Wszystkie kroki'
         self._hist_tick = QTimer(self)
         self._hist_tick.setInterval(120)
         self._hist_tick.timeout.connect(self._hist_progress)
@@ -3292,7 +3293,7 @@ class StudioWindow(QMainWindow):
         if not self.hist_bar.isVisible():
             return
         infos, current = self.document.infos()
-        sig = (tuple((i.get('label'), i.get('icon'), bool(i.get('stale')), bool(i.get('off')), i.get('note'), i.get('group'), i.get('why')) for i in infos), current, bool(self.document.backup), tuple(sorted(self._hist_folded)))
+        sig = (tuple((i.get('label'), i.get('icon'), bool(i.get('stale')), bool(i.get('off')), i.get('note'), i.get('group'), i.get('why')) for i in infos), current, bool(self.document.backup), tuple(sorted(self._hist_folded)), self._hist_filter)
         self.hist_revert.setEnabled(bool(self.document.backup))
         if sig == self._hist_sig:
             return
@@ -3322,7 +3323,7 @@ class StudioWindow(QMainWindow):
                 tag.setStyleSheet('color:#187ac1; font-size:11px; font-weight:700; background:transparent; border:none; padding:0 4px;')
                 tag.clicked.connect(lambda _=False, g=group: self._hist_fold(g))
                 self.hist_row.addWidget(tag)
-            if folded:
+            if folded or (i != current and i != 0 and not hist.passes_filter(info, self._hist_filter)):
                 chip.deleteLater()
                 continue
             chip.setToolTip(f"{i}. {info.get('note') or info.get('label', '')}" + (f"\n({info['label']})" if info.get('note') else '') + (f"\nGrupa: {group}" if group else '') + (('\nBŁĄD: ' + info.get('why', 'nie dało się przeliczyć tego kroku')) if info.get('stale') else '')
@@ -3456,6 +3457,13 @@ class StudioWindow(QMainWindow):
             loaders[sub.addAction('Wczytaj (można cofnąć strzałką)')] = name
             removers[sub.addAction('Usuń wariant')] = name
         menu.addSeparator()
+        filters = {}
+        filter_menu = menu.addMenu('Filtr kroków: ' + self._hist_filter)
+        for name in hist.FILTERS:
+            act = filter_menu.addAction(name)
+            act.setCheckable(True)
+            act.setChecked(name == self._hist_filter)
+            filters[act] = name
         export = menu.addAction('Eksportuj listę kroków do pliku tekstowego…')
         auto = self._autosave_path()
         recover = menu.addAction('Otwórz autozapis') if auto.exists() else None
@@ -3476,6 +3484,10 @@ class StudioWindow(QMainWindow):
         elif chosen in removers:
             self.document.delete_snapshot(removers[chosen])
             self.refresh()
+        elif chosen in filters:
+            self._hist_filter = filters[chosen]
+            self._hist_sig = None
+            self._hist_update()
         elif chosen is export:
             self.history_export_text()
         elif recover is not None and chosen is recover:

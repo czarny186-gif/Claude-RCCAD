@@ -304,6 +304,13 @@ class DocumentTests(unittest.TestCase):
         matched,_=h.match_face(new,ref)
         self.assertLess(matched.Center().toTuple()[0],10);self.assertAlmostEqual(matched.Center().toTuple()[2],30,3)
 
+    def test_history_filter(self):
+        from rccad import history as h
+        self.assertTrue(h.passes_filter({'icon':'extrude'},'Wszystkie kroki'))
+        self.assertTrue(h.passes_filter({'icon':'sketch'},'Szkice i tekst'));self.assertFalse(h.passes_filter({'icon':'extrude'},'Szkice i tekst'))
+        self.assertTrue(h.passes_filter({'icon':'cut'},'Operacje na bryłach'));self.assertTrue(h.passes_filter({'icon':'mod'},'Modyfikacje'))
+        self.assertTrue(h.passes_filter({'icon':'mod','stale':True},'Tylko błędy'));self.assertFalse(h.passes_filter({'icon':'mod'},'Tylko błędy'))
+
     def test_corrupted_project(self):
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'bad.rccadx';path.write_bytes(b'not a zip')
