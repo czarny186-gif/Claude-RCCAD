@@ -72,7 +72,31 @@ class HistoryPerf(unittest.TestCase):
             path = Path(directory) / 'p.rccadx'
             with Timer() as t:
                 d.save(path)
-            report('zapis projektu', t.seconds, f'({path.stat().st_size // 1024} KB)')
+            report('zapis projektu (pierwszy)', t.seconds, f'({path.stat().st_size // 1024} KB)')
+            with Timer() as t:
+                d.save(path)
+            report('zapis projektu (drugi, z pamięcią podręczną BREP)', t.seconds)
+            self.assertLess(t.seconds, 1.5)
+            import cadquery as cq
+            from zipfile import ZipFile
+            from concurrent.futures import ThreadPoolExecutor
+            with ZipFile(path) as archive, tempfile.TemporaryDirectory() as work:
+                names = [n for n in archive.namelist() if n.endswith('.brep')]
+                files = []
+                for n in names:
+                    f = Path(work) / Path(n).name
+                    f.write_bytes(archive.read(n)); files.append(f)
+                with Timer() as t:
+                    shapes = [cq.importers.importBrep(str(f)).val() for f in files]
+                report('wczytanie: sam import BREP po kolei', t.seconds, f'({len(files)} plików)')
+                with Timer() as t:
+                    for sh in shapes:
+                        k.valid(sh, True)
+                report('wczytanie: sama walidacja po kolei', t.seconds)
+                with Timer() as t:
+                    with ThreadPoolExecutor(4) as pool:
+                        list(pool.map(lambda f: cq.importers.importBrep(str(f)).val(), files))
+                report('wczytanie: import w 4 wątkach', t.seconds)
             with Timer() as t:
                 o = Document.load(path)
             report('wczytanie projektu', t.seconds)

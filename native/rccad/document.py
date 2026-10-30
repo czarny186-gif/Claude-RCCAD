@@ -47,6 +47,7 @@ class Document:
         self.pending_label = None
         self.pending_icon = None
         self.pending_op = None
+        self._brep_cache = {}      # id(kształt) -> (kształt, bajty BREP): kolejne zapisy i autozapisy nie eksportują ponownie niezmienionej geometrii
         self._mesh_cache = {}      # id(kształt) -> (kształt, siatka): siatki wyświetlania liczone leniwie, tylko dla bieżącego stanu
         self.keep_future = False   # po przeskoku w historii nowa operacja wstawia się w środek, a późniejsze kroki są przeliczane
         self.deferred = None       # (stan sprzed wstawienia, późniejsze kroki) do przeliczenia w tle
@@ -229,6 +230,18 @@ class Document:
             entry['frame'] = body.plane.to_dict()
         return entry
 
+    def _brep_bytes(self, shape, scratch):
+        hit = self._brep_cache.get(id(shape))
+        if hit is not None and hit[0] is shape:
+            return hit[1]
+        cq.exporters.export(shape, str(scratch), exportType="BREP")
+        data = scratch.read_bytes()
+        scratch.unlink()
+        if len(self._brep_cache) > 3000:
+            self._brep_cache.clear()
+        self._brep_cache[id(shape)] = (shape, data)
+        return data
+
     def save(self, path, mark=True):
         """Zapisuje cały projekt razem z historią: każda unikalna geometria raz (BREP), a kroki jako listy odwołań do niej."""
         path = Path(path)
@@ -250,9 +263,8 @@ class Document:
                             if key not in index:
                                 index[key] = len(shapes)
                                 shapes.append(body.shape)
-                                source = Path(work) / f"s{index[key]}.brep"
-                                cq.exporters.export(body.shape, str(source), exportType="BREP")
-                                archive.write(source, f"shapes/{index[key]}.brep")
+                                data = self._brep_bytes(body.shape, Path(work) / f"s{index[key]}.brep")
+                                archive.writestr(f"shapes/{index[key]}.brep", data)
                                 manifest['shapes'].append(f"shapes/{index[key]}.brep")
                             entries.append(self._entry(body, index[key]))
                         out.append(dict(label=info.get('label', ''), icon=info.get('icon', 'move'), op=info.get('op'), stale=bool(info.get('stale')), off=bool(info.get('off')), note=info.get('note'), group=info.get('group'), why=info.get('why'), bodies=entries))
