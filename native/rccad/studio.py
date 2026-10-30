@@ -3635,10 +3635,10 @@ class StudioWindow(QMainWindow):
                 self.toast('Ten krok nie dodaje obiektów ani nie ma przepisu - nie ma czego edytować.')
                 return
             added = [b for b in new_bodies if b.kind == 'sketch' and b.meta and b.meta.get('tool') in sm.EDITABLE]
-            edits, links, target = [], [], (added[0] if added else None)
+            edits, links, factors, target = [], [], [], (added[0] if added else None)
             if target is not None:
                 labels = sm.LABELS.get(target.meta['tool'], ())
-                drivers = [(b, i, f'{b.name}: {cap}') for b in bodies if b.kind == 'sketch' and b.id != target.id and b.meta and b.meta.get('tool') in sm.EDITABLE
+                drivers = [(b, i, f'{b.name}: {cap}') for b in bodies if b.kind == 'sketch' and b.meta and b.meta.get('tool') in sm.EDITABLE
                            for i, cap in enumerate(sm.LABELS.get(b.meta['tool'], ()))]
                 for n, (caption, value) in enumerate(zip(labels, sm.values(target.meta))):
                     formula = next((c['expr'] for c in self.document.constraints if c['b'] == target.id and c['bi'] == n and 'expr' in c), None)
@@ -3650,11 +3650,18 @@ class StudioWindow(QMainWindow):
                     link.addItem('Wymiar niezależny', None)
                     current = next((c for c in self.document.constraints if c['b'] == target.id and c['bi'] == n and 'a' in c), None)
                     for b, i, text in drivers:
-                        link.addItem('= ' + text, (b.id, i))
+                        if b.id == target.id and i == n:      # wymiar nie może zależeć od samego siebie
+                            continue
+                        link.addItem(('= (ten szkic) ' if b.id == target.id else '= ') + text, (b.id, i))
                         if current and current['a'] == b.id and current['ai'] == i:
                             link.setCurrentIndex(link.count() - 1)
+                    factor = QLineEdit(f"{float(current.get('k', 1.0)):g}" if current else '1')
+                    factor.setPlaceholderText('współczynnik ×')
+                    factor.setToolTip('Wymiar = współczynnik × wymiar wskazany powyżej (np. 0,5 = połowa, 2 = podwójny)')
                     lay.addWidget(link)
+                    lay.addWidget(factor)
                     links.append(link)
+                    factors.append(factor)
             lay.addWidget(_label('Położenie dodanych obiektów: przesunięcie (mm) i obrót (°) względem stanu z tego kroku', 'psub'))
             place = []
             for caption in ('Przesuń X', 'Przesuń Y', 'Przesuń Z', 'Obrót wokół X', 'Obrót wokół Y', 'Obrót wokół Z'):
@@ -3662,7 +3669,7 @@ class StudioWindow(QMainWindow):
                 lay.addWidget(_label(caption, 'psub'))
                 lay.addWidget(spin)
                 place.append(spin)
-            fields = dict(kind='sketch', target=target, edits=edits, links=links, place=place, added=[b.id for b in new_bodies])
+            fields = dict(kind='sketch', target=target, edits=edits, links=links, factors=factors, place=place, added=[b.id for b in new_bodies])
         self._hist_fields = fields
         if recipe and recipe.get('type') in ('extrude', 'mod') and (info.get('stale') or recipe.get('type') == 'mod' or any(p.get('k') == 'face' for p in recipe.get('profiles', ()))):
             pick = QPushButton('Wskaż ponownie w modelu…')
@@ -3825,7 +3832,13 @@ class StudioWindow(QMainWindow):
                         constraints.append(dict(b=target.id, bi=n, expr=text))
                     for n, link in enumerate(fields['links']):
                         if link.currentData() and n not in formulas:
-                            constraints.append(dict(a=link.currentData()[0], ai=link.currentData()[1], b=target.id, bi=n, k=1.0))
+                            try:
+                                k = float(fields['factors'][n].text().strip().replace(',', '.') or '1')
+                            except ValueError:
+                                raise ValueError('Współczynnik więzu musi być liczbą (np. 0,5).')
+                            constraints.append(dict(a=link.currentData()[0], ai=link.currentData()[1], b=target.id, bi=n, k=k))
+                    if hist.constraint_cycle(constraints):
+                        raise ValueError('Te więzy tworzą pętlę (wymiar zależałby sam od siebie).')
 
                 def first():
                     result = tuple(replace(b, shape=shape, mesh=kernel.display_mesh(shape), meta=meta) if (target is not None and b.id == target.id) else b for b in bodies)

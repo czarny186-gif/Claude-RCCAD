@@ -648,33 +648,56 @@ def apply_constraints(bodies, constraints):
     if not ctx.constraints:
         return tuple(bodies)
     bodies = list(bodies)
-    for c in ctx.constraints:
-        index = {b.id: i for i, b in enumerate(bodies)}
-        if c['b'] not in index:
-            continue
-        b = bodies[index[c['b']]]
-        if not (b.meta and b.meta.get('tool') in sm.EDITABLE):
-            continue
-        try:
-            if 'expr' in c:
-                target = evaluate(c['expr'], ctx.values)
-            else:
-                if c['a'] not in index:
-                    continue
-                a = bodies[index[c['a']]]
-                if not (a.meta and a.meta.get('tool') in sm.EDITABLE):
-                    continue
-                target = float(sm.values(a.meta)[c['ai']].replace(',', '.')) * float(c.get('k', 1.0))
-            values = [float(x.replace(',', '.')) for x in sm.values(b.meta)]
-            if abs(values[c['bi']] - target) < 1e-6:
-                continue
-            values[c['bi']] = target
-            meta = sm.apply_values(b.meta, values)
-            shape = meta_shape(b.plane, meta)
-            bodies[index[c['b']]] = Body(b.name, shape, b.kind, b.plane, b.id, b.visible, meta=meta).prepared()
-        except Exception:
-            continue
+    for _ in range(len(ctx.constraints) + 1):      # kilka przebiegów: łańcuch więzów (A -> B -> C) ustala się niezależnie od kolejności
+      changed = False
+      for c in ctx.constraints:
+          index = {b.id: i for i, b in enumerate(bodies)}
+          if c['b'] not in index:
+              continue
+          b = bodies[index[c['b']]]
+          if not (b.meta and b.meta.get('tool') in sm.EDITABLE):
+              continue
+          try:
+              if 'expr' in c:
+                  target = evaluate(c['expr'], ctx.values)
+              else:
+                  if c['a'] not in index:
+                      continue
+                  a = bodies[index[c['a']]]
+                  if not (a.meta and a.meta.get('tool') in sm.EDITABLE):
+                      continue
+                  target = float(sm.values(a.meta)[c['ai']].replace(',', '.')) * float(c.get('k', 1.0))
+              values = [float(x.replace(',', '.')) for x in sm.values(b.meta)]
+              if abs(values[c['bi']] - target) < 1e-6:
+                  continue
+              values[c['bi']] = target
+              meta = sm.apply_values(b.meta, values)
+              shape = meta_shape(b.plane, meta)
+              bodies[index[c['b']]] = Body(b.name, shape, b.kind, b.plane, b.id, b.visible, meta=meta).prepared()
+              changed = True
+          except Exception:
+              continue
+      if not changed:
+        break
     return tuple(bodies)
+
+
+def constraint_cycle(constraints):
+    """True, gdy więzy wymiarów tworzą pętlę zależności (wymiar zależy od samego siebie przez inne)."""
+    graph = {}
+    for c in constraints:
+        if 'a' in c:
+            graph.setdefault((c['a'], c['ai']), set()).add((c['b'], c['bi']))
+    state = {}
+
+    def visit(node):
+        state[node] = 1
+        for nxt in graph.get(node, ()):
+            if state.get(nxt) == 1 or (nxt not in state and visit(nxt)):
+                return True
+        state[node] = 2
+        return False
+    return any(node not in state and visit(node) for node in list(graph))
 
 
 def rebuild(base, steps, constraints=(), job=None):

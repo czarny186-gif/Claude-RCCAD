@@ -311,6 +311,18 @@ class DocumentTests(unittest.TestCase):
         self.assertTrue(h.passes_filter({'icon':'cut'},'Operacje na bryłach'));self.assertTrue(h.passes_filter({'icon':'mod'},'Modyfikacje'))
         self.assertTrue(h.passes_filter({'icon':'mod','stale':True},'Tylko błędy'));self.assertFalse(h.passes_filter({'icon':'mod'},'Tylko błędy'))
 
+    def test_constraints_inside_one_sketch_chains_and_cycles(self):
+        from dataclasses import replace as rep
+        from rccad import history as h
+        mk=lambda name,tool,pts:Body(name,k.sketch_shape(tool,'XY',pts,5),'sketch','XY',meta=dict(tool=tool,points=[list(p) for p in pts],sides=5)).prepared()
+        r=mk('R','rect',[(0,0),(30,10)]);b=mk('B','rect',[(40,0),(50,5)])
+        cons=[dict(a=r.id,ai=1,b=b.id,bi=0,k=1.0),dict(a=r.id,ai=0,b=r.id,bi=1,k=.5)]      # kolejność „od końca”: łańcuch musi się ustalić
+        out={x.id:x for x in h.apply_constraints((r,b),cons)}
+        self.assertAlmostEqual(k.bounds(out[r.id].shape).ylen,15,3);self.assertAlmostEqual(k.bounds(out[b.id].shape).xlen,15,3)
+        self.assertFalse(h.constraint_cycle(cons))
+        self.assertTrue(h.constraint_cycle(cons+[dict(a=b.id,ai=0,b=r.id,bi=0,k=1.0)]))
+        self.assertTrue(h.constraint_cycle([dict(a=r.id,ai=0,b=r.id,bi=1,k=1.0),dict(a=r.id,ai=1,b=r.id,bi=0,k=1.0)]))
+
     def test_corrupted_project(self):
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'bad.rccadx';path.write_bytes(b'not a zip')
