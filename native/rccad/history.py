@@ -78,10 +78,30 @@ def _scale(shape):
     return max(box.xlen, box.ylen, box.zlen, 1e-6)
 
 
-def face_ref(face, normal, point):
+def _extent_along(shape, n):
+    """(min, max) rzutu wierzchołków bryły na kierunek n."""
+    values = [float(np.array(v.toTuple(), float) @ n) for v in shape.Vertices()]
+    return (min(values), max(values)) if values else (0.0, 0.0)
+
+
+def _extreme(shape, face, n):
+    """'max' / 'min', gdy ściana leży na skraju bryły w kierunku normalnej (np. górna ściana), inaczej None."""
+    if shape is None:
+        return None
+    lo, hi = _extent_along(shape, n)
+    offset = float(np.array(face.Center().toTuple(), float) @ n)
+    tol = 1e-6 * max(_scale(shape), 1.0)
+    return 'max' if abs(offset - hi) < tol else 'min' if abs(offset - lo) < tol else None
+
+
+def face_ref(face, normal, point, shape=None):
     c = np.array(face.Center().toTuple(), float)
     n = _unit(normal)
-    return dict(normal=[float(x) for x in n], point=[float(x) for x in point], centroid=[float(x) for x in c], area=float(face.Area()))
+    ref = dict(normal=[float(x) for x in n], point=[float(x) for x in point], centroid=[float(x) for x in c], area=float(face.Area()))
+    extreme = _extreme(shape, face, n)
+    if extreme:
+        ref['extreme'] = extreme      # ściana na skraju bryły (górna / dolna) zostaje na skraju po zmianie rozmiarów
+    return ref
 
 
 def match_face(shape, ref):
@@ -93,6 +113,8 @@ def match_face(shape, ref):
     except kernel.CadError:
         pass
     c0, a0, scale = np.array(ref.get('centroid', ref['point']), float), float(ref.get('area', 0.0)), _scale(shape)
+    lo, hi = _extent_along(shape, n0)
+    want = ref.get('extreme')
     best = None
     for face in shape.Faces():
         if face.geomType() != 'PLANE':
@@ -105,6 +127,11 @@ def match_face(shape, ref):
         off = abs(float(d @ n0))
         inplane = float(np.linalg.norm(d - float(d @ n0) * n0))
         area = float(face.Area())
+        offset = float(c @ n0)
+        at = 'max' if abs(offset - hi) < 1e-6 * max(scale, 1.0) else 'min' if abs(offset - lo) < 1e-6 * max(scale, 1.0) else None
+        if want:
+            # ściana była skrajna: skrajna ściana w tym samym kierunku wygrywa mimo zmiany położenia, nieskrajne dostają karę
+            off = 0.0 if at == want else off + scale
         score = off + .25 * inplane + .5 * scale * abs(area - a0) / max(area, a0, 1e-9)
         if best is None or score < best[0]:
             best = (score, face, fn)
@@ -136,7 +163,8 @@ def describe_profiles(profiles, bodies=()):
                 spec['anchor'] = {'id': best[1], 'offset': [float(c) for c in best[2]]}
             out.append(spec)
         else:
-            ref = face_ref(src['face'], src['normal'], src.get('hit', src['center'])) if src.get('face') is not None else dict(
+            owner = next((b for b in bodies if b.id == src.get('id')), None)
+            ref = face_ref(src['face'], src['normal'], src.get('hit', src['center']), owner.shape if owner is not None else None) if src.get('face') is not None else dict(
                 normal=[float(c) for c in src['normal']], point=[float(c) for c in src.get('hit', src['center'])])
             out.append(dict(ref, k='face', id=src['id']))
     return out

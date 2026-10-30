@@ -290,6 +290,20 @@ class DocumentTests(unittest.TestCase):
             o.delete_snapshot('v1');self.assertFalse(o.snapshots)
             self.assertEqual(len(Document.load(auto).states()),4)
 
+    def test_face_reference_prefers_extreme_face_after_resizing(self):
+        from rccad import history as h
+        import cadquery as cq
+        def build(ha,hb):
+            return cq.Workplane('XY').box(10,10,ha,centered=False).union(cq.Workplane('XY').box(10,10,hb,centered=False).translate((10,0,0))).val()
+        old=Body('L',build(20,8)).prepared()
+        face,n=k.face_at(old.shape,(0,0,1),(5,5,20))
+        src=dict(kind='face',id=old.id,face=face,normal=tuple(n),center=face.Center().toTuple(),hit=(5,5,20))
+        ref=h.describe_profiles([src],[old])[0]
+        self.assertEqual(ref.get('extreme'),'max')
+        new=build(30,22)       # plan: wieża A (x<10) jest teraz wyższa, a niższa wieża B ma wierzch bliżej starej wysokości
+        matched,_=h.match_face(new,ref)
+        self.assertLess(matched.Center().toTuple()[0],10);self.assertAlmostEqual(matched.Center().toTuple()[2],30,3)
+
     def test_corrupted_project(self):
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'bad.rccadx';path.write_bytes(b'not a zip')
