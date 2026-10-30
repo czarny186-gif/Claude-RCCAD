@@ -1,6 +1,10 @@
 """Historia parametryczna: przepisy operacji (JSON), ich ponowne wykonanie na zmienionym stanie i przeliczanie następnych kroków.
 Czysta logika bez Qt: studio podaje stany (listy Body), a tu wyliczane są nowe stany po edycji któregoś kroku."""
 from __future__ import annotations
+import ast
+import re
+import math
+import operator
 import uuid
 from dataclasses import replace
 import numpy as np
@@ -438,7 +442,87 @@ def place_bodies(bodies, ids, move=(0, 0, 0), rotate=(0, 0, 0)):
 RUNNERS = {'delete': run_delete, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'pattern': run_pattern, 'mod': run_mod, 'transform': run_transform, 'mirror': run_mirror, 'bool': run_bool}
 
 
-def run_recipe(bodies, recipe):
+_BINARY = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv, ast.Pow: operator.pow,
+           ast.Mod: operator.mod, ast.FloorDiv: operator.floordiv}
+_FUNCTIONS = {'sqrt': math.sqrt, 'sin': lambda x: math.sin(math.radians(x)), 'cos': lambda x: math.cos(math.radians(x)),
+              'tan': lambda x: math.tan(math.radians(x)), 'abs': abs, 'min': min, 'max': max, 'round': round}
+
+
+def _decimal(text):
+    text = str(text).strip()
+    return text if re.search(r'\b(min|max|round)\s*\(', text) else text.replace(',', '.')
+
+
+def evaluate(text, variables=None):
+    """Bezpieczne wyliczenie wyrażenia (liczby, + - * / ** %, nawiasy, zmienne, sqrt / sin / cos / tan / abs / min / max / round, pi)."""
+    names = dict(variables or {})
+    names.setdefault('pi', math.pi)
+
+    def walk(node):
+        if isinstance(node, ast.Expression):
+            return walk(node.body)
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
+            return float(node.value)
+        if isinstance(node, ast.Name) and node.id in names:
+            return float(names[node.id])
+        if isinstance(node, ast.BinOp) and type(node.op) in _BINARY:
+            return float(_BINARY[type(node.op)](walk(node.left), walk(node.right)))
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+            return -walk(node.operand) if isinstance(node.op, ast.USub) else walk(node.operand)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in _FUNCTIONS and not node.keywords:
+            return float(_FUNCTIONS[node.func.id](*[walk(a) for a in node.args]))
+        raise ValueError(ast.dump(node)[:40])
+
+    try:
+        value = walk(ast.parse(_decimal(text), mode='eval'))
+    except Exception as exc:
+        raise kernel.CadError(f'Nieprawidłowe wyrażenie: {text}') from exc
+    if not math.isfinite(value):
+        raise kernel.CadError(f'Wyrażenie nie daje liczby: {text}')
+    return value
+
+
+def variable_values(variables):
+    """Zmienne projektu (nazwa -> wyrażenie) policzone po kolei: późniejsze mogą korzystać z wcześniejszych."""
+    out = {}
+    for name, expr in (variables or {}).items():
+        out[name] = evaluate(expr, out)
+    return out
+
+
+def has_expr(obj):
+    if isinstance(obj, dict):
+        return ('expr' in obj and len(obj) == 1) or any(has_expr(v) for v in obj.values())
+    if isinstance(obj, (list, tuple)):
+        return any(has_expr(v) for v in obj)
+    return False
+
+
+def resolve(obj, values):
+    """Zamienia {'expr': '...'} w przepisie na liczby (według zmiennych projektu)."""
+    if isinstance(obj, dict):
+        if len(obj) == 1 and 'expr' in obj:
+            return evaluate(obj['expr'], values)
+        return {k: resolve(v, values) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [resolve(v, values) for v in obj]
+    return obj
+
+
+class Context:
+    """Więzy, zmienne i znacznik zmiany zmiennych przekazywane do przeliczania."""
+
+    def __init__(self, constraints=(), values=None, force=False):
+        self.constraints, self.values, self.force = list(constraints or ()), dict(values or {}), force
+
+
+def _ctx(value):
+    return value if isinstance(value, Context) else Context(value or ())
+
+
+def run_recipe(bodies, recipe, values=None):
+    if values is not None and has_expr(recipe):
+        recipe = resolve(recipe, values)
     return tuple(RUNNERS[recipe['type']](bodies, recipe))
 
 
@@ -484,21 +568,29 @@ def meta_shape(plane, meta):
 
 
 def apply_constraints(bodies, constraints):
-    """Więzy wymiarów: wymiar bi szkicu b = k * wymiar ai szkicu a. Brak któregoś szkicu - więz jest pomijany."""
-    if not constraints:
+    """Więzy wymiarów: wymiar bi szkicu b = k * wymiar ai szkicu a albo = wyrażenie ze zmiennych projektu. Brak szkicu - więz pomijany."""
+    ctx = _ctx(constraints)
+    if not ctx.constraints:
         return tuple(bodies)
     bodies = list(bodies)
-    for c in constraints:
+    for c in ctx.constraints:
         index = {b.id: i for i, b in enumerate(bodies)}
-        if c['a'] not in index or c['b'] not in index:
+        if c['b'] not in index:
             continue
-        a, b = bodies[index[c['a']]], bodies[index[c['b']]]
-        if not (a.meta and b.meta and a.meta.get('tool') in sm.EDITABLE and b.meta.get('tool') in sm.EDITABLE):
+        b = bodies[index[c['b']]]
+        if not (b.meta and b.meta.get('tool') in sm.EDITABLE):
             continue
         try:
-            driver = float(sm.values(a.meta)[c['ai']].replace(',', '.'))
+            if 'expr' in c:
+                target = evaluate(c['expr'], ctx.values)
+            else:
+                if c['a'] not in index:
+                    continue
+                a = bodies[index[c['a']]]
+                if not (a.meta and a.meta.get('tool') in sm.EDITABLE):
+                    continue
+                target = float(sm.values(a.meta)[c['ai']].replace(',', '.')) * float(c.get('k', 1.0))
             values = [float(x.replace(',', '.')) for x in sm.values(b.meta)]
-            target = driver * float(c.get('k', 1.0))
             if abs(values[c['bi']] - target) < 1e-6:
                 continue
             values[c['bi']] = target
@@ -510,39 +602,8 @@ def apply_constraints(bodies, constraints):
     return tuple(bodies)
 
 
-def changed_ids(before, current):
-    """Identyfikatory obiektów, które różnią się między dwoma stanami (inny kształt, widoczność, nazwa albo brak po jednej stronie)."""
-    bm, cm = {b.id: b for b in before}, {b.id: b for b in current}
-    return {i for i in bm.keys() | cm.keys()
-            if i not in bm or i not in cm or bm[i].shape is not cm[i].shape or bm[i].visible != cm[i].visible or bm[i].name != cm[i].name}
-
-
-def reads(recipe, current):
-    """Zbiór obiektów, od których zależy wynik kroku (None = nie wiadomo, trzeba liczyć od nowa)."""
-    kind = recipe['type']
-    sketches = {b.id for b in current if b.kind == 'sketch'}
-    if kind == 'extrude':
-        ids = set(recipe.get('spent', ()))
-        for spec in recipe['profiles']:
-            if spec['k'] == 'region':
-                ids |= sketches
-            else:
-                ids.add(spec['id'])
-        return ids
-    if kind in ('mod', 'transform', 'mirror', 'pattern', 'sketchmeta'):
-        return {recipe['id']}
-    if kind == 'bool':
-        return {recipe['base'], *recipe['tools']}
-    if kind == 'delete':
-        return set(recipe['ids'])
-    if kind == 'trim':
-        return {recipe['id']} | sketches
-    if kind == 'text':
-        return set()
-    return None
-
-
 def rebuild(base, steps, constraints=(), job=None):
+    ctx = _ctx(constraints)
     """Wykonuje kolejno kroki na stanie `base`. steps: lista (stan_przed_oryginalny, stan_po_oryginalny, info[, info_oryginalny]).
     Szybkie ścieżki: stan wejściowy nie zmienił się względem oryginału -> wynik oryginalny; krok niezależny od zmienionych obiektów ->
     przeniesienie różnicy bez ponownych obliczeń. Krok wyłączony ('off') niczego nie zmienia; nieprzeliczalny dostaje 'stale'.
@@ -558,30 +619,35 @@ def rebuild(base, steps, constraints=(), job=None):
         info = {key: v for key, v in info.items() if key != 'stale'}
         original = {key: v for key, v in original.items() if key != 'stale'}
         recipe = info.get('op')
-        result = None
+        result, why = None, None
         diff = changed_ids(before, current)
-        if info == original and not diff:
+        expr_step = bool(recipe) and ctx.force and has_expr(recipe)
+        if info == original and not diff and not expr_step:
             result = tuple(after)
         elif info.get('off'):
             result = current
         elif recipe and recipe.get('type') in RUNNERS:
-            dependencies = reads(recipe, current) if info == original else None
+            dependencies = reads(recipe, current) if (info == original and not expr_step) else None
             if dependencies is not None and not (dependencies & diff):
                 merged, ok = diff_apply(before, after, current)
                 result = tuple(merged) if ok else None
             if result is None:
                 try:
-                    result = run_recipe(current, recipe)
-                except Exception:
-                    result = None
+                    result = run_recipe(current, recipe, ctx.values)
+                except Exception as exc:
+                    result, why = None, str(exc) or exc.__class__.__name__
         else:
             merged, ok = diff_apply(before, after, current)
             result = tuple(merged) if ok else None
+            if not ok:
+                why = 'Ten krok zmienił obiekt, który wcześniej został zmieniony, a krok nie ma przepisu do ponownego wykonania.'
+        info.pop('why', None)
         if result is None:
             failed += 1
             info['stale'] = True
+            info['why'] = why or 'Nie udało się przeliczyć tego kroku.'
             result = current
-        result = apply_constraints(result, constraints)
+        result = apply_constraints(result, ctx)
         out.append((result, info))
         current = result
     return out, failed
@@ -594,7 +660,7 @@ def _steps(states, indices):
 def recompute(states, k, edited_bodies, constraints=(), job=None):
     """Po edycji kroku k (jego nowy wynik: edited_bodies) przelicza kolejne kroki. Zwraca (nowe stany, liczba nieprzeliczonych kroków)."""
     edited_bodies = apply_constraints(edited_bodies, constraints)
-    head = list(states[:k]) + [(tuple(edited_bodies), {key: v for key, v in states[k][1].items() if key != 'stale'})]
+    head = list(states[:k]) + [(tuple(edited_bodies), {key: v for key, v in states[k][1].items() if key not in ('stale', 'why')})]
     tail, failed = rebuild(edited_bodies, _steps(states, range(k + 1, len(states))), constraints, job)
     return head + tail, failed
 
@@ -623,3 +689,11 @@ def move_step(states, j, constraints=(), job=None):
              *_steps(states, range(j + 2, len(states)))]
     tail, failed = rebuild(states[j - 1][0], steps, constraints, job)
     return list(states[:j]) + tail, failed
+
+
+def recompute_all(states, constraints=(), job=None):
+    """Pełne przeliczenie od pierwszego kroku (np. po zmianie zmiennej projektu): kroki z wyrażeniami liczone od nowa."""
+    ctx = _ctx(constraints)
+    ctx.force = True
+    tail, failed = rebuild(states[0][0], _steps(states, range(1, len(states))), ctx, job)
+    return [states[0], *tail], failed

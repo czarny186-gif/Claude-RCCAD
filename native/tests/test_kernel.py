@@ -249,6 +249,32 @@ class DocumentTests(unittest.TestCase):
             path=Path(directory)/'lazy.rccadx';d.save(path);d.undo();o=Document.load(path)
             self.assertTrue(all(b.mesh is not None for b in o.bodies));o.undo();self.assertTrue(all(b.mesh is not None for b in o.bodies))    # siatki liczone leniwie przy przeskoku
 
+    def test_variables_expressions_recompute_all_and_persistence(self):
+        from rccad import history as h
+        self.assertAlmostEqual(h.evaluate('sqrt(w*w) / 2 + 1,5', {'w': 10}), 6.5)
+        self.assertAlmostEqual(h.evaluate('cos(60)'), .5)
+        for bad in ('__import__("os")', 'w.real', 'x + 1', '1/0', '[1]'):
+            with self.assertRaises(k.CadError):h.evaluate(bad, {'w': 1})
+        self.assertEqual(h.variable_values({'a': '10', 'b': 'a * 2'}), {'a': 10.0, 'b': 20.0})
+        with self.assertRaises(k.CadError):h.variable_values({'b': 'a * 2'})
+        a=Body('A',k.box(10,10,10)).prepared()
+        face,n=k.face_at(a.shape,(0,0,1),(5,5,10))
+        src=dict(kind='face',id=a.id,face=face,normal=tuple(n),center=face.Center().toTuple(),hit=(5,5,10))
+        r=dict(type='extrude',mode='join',dir='one',d1={'expr':'h'},d2=0,profiles=h.describe_profiles([src],[a]),spent=[],out=[])
+        self.assertTrue(h.has_expr(r))
+        states=[((),{'label':'P','icon':'start'}),((a,),{'label':'A','icon':'file'})]
+        states.append((h.run_recipe(states[-1][0],r,{'h':5.0}),{'label':'E','icon':'extrude','op':r}))
+        self.assertAlmostEqual(states[-1][0][0].shape.Volume(),1500,1)
+        out,failed=h.recompute_all(states,h.Context((),{'h':20.0}));self.assertEqual(failed,0)
+        self.assertAlmostEqual(out[-1][0][0].shape.Volume(),3000,1)
+        bad,failed=h.recompute_all(states,h.Context((),{}))
+        self.assertEqual(failed,1);self.assertTrue(bad[-1][1].get('stale'));self.assertTrue(bad[-1][1].get('why'))
+        d=Document();d.commit([a],'A');d.commit(list(out[-1][0]),'E',op=r)
+        d.rewrite(d.states(),len(d.states())-1,None,{'h':'20'})
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'vars.rccadx';d.save(path);o=Document.load(path)
+            self.assertEqual(o.variables,{'h':'20'});self.assertEqual(o.states()[-1][1]['op']['d1'],{'expr':'h'})
+
     def test_corrupted_project(self):
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'bad.rccadx';path.write_bytes(b'not a zip')

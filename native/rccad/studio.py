@@ -87,6 +87,29 @@ def profile_face(wire):
         return None
 
 
+class _ExprBox(QLineEdit):
+    """Pole liczby albo wyrażenia (np. szerokość / 2). raw() zwraca liczbę albo {'expr': tekst}; value() - policzoną liczbę."""
+
+    def __init__(self, value=0.0, values=None):
+        super().__init__()
+        self.values = values or {}
+        self.setValue(value)
+
+    def setValue(self, value):
+        self.setText(value['expr'] if isinstance(value, dict) else f'{float(value):g}')
+
+    def raw(self):
+        text = self.text().strip()
+        try:
+            return float(text.replace(',', '.'))
+        except ValueError:
+            return {'expr': text}
+
+    def value(self):
+        raw = self.raw()
+        return hist.evaluate(raw['expr'], self.values) if isinstance(raw, dict) else raw
+
+
 class _HistChip(QToolButton):
     """Symbol kroku historii: klik = przeskok, dwuklik = edycja parametrów kroku."""
     editRequested = Signal()
@@ -380,6 +403,11 @@ class StudioWindow(QMainWindow):
         self._hist_tick = QTimer(self)
         self._hist_tick.setInterval(120)
         self._hist_tick.timeout.connect(self._hist_progress)
+        self.hist_varbtn = QPushButton('Zmienne')
+        self.hist_varbtn.setObjectName('chip')
+        self.hist_varbtn.setToolTip('Zmienne projektu i wyrażenia w polach kroków (np. szerokość / 2)')
+        self.hist_varbtn.clicked.connect(self.history_variables)
+        hl.addWidget(self.hist_varbtn)
         self.hist_compare = QPushButton('Porównaj')
         self.hist_compare.setObjectName('chip')
         self.hist_compare.setCheckable(True)
@@ -400,6 +428,15 @@ class StudioWindow(QMainWindow):
         self.hist_edit_layout.setSpacing(6)
         self.hist_edit.setFixedWidth(330)
         self.hist_edit.hide()
+        self.hist_vars = QFrame(v)
+        self.hist_vars.setObjectName('panel')
+        self.hist_vars_layout = QVBoxLayout(self.hist_vars)
+        self.hist_vars_layout.setContentsMargins(14, 12, 14, 12)
+        self.hist_vars_layout.setSpacing(6)
+        self.hist_vars.setFixedWidth(360)
+        self.hist_vars.hide()
+        self._repick = None
+        ui.shadow(self.hist_vars, 19, 5, 43)
         ui.shadow(self.hist_edit, 19, 5, 43)
         self._hist_sig = None
         ui.shadow(self.hist_bar, 19, 5, 43)
@@ -860,7 +897,7 @@ class StudioWindow(QMainWindow):
         self.ex_panel.move(18, 170)
         self.ex_bar.adjustSize()
         self.ex_bar.move(346, 170)
-        for w in (*self.tools.values(), self.shape_bar, self.clear_button, self.undo_button, self.redo_button, self.layers, self.xray, self.home, self.cube, self.pad, self.hist_bar, self.hist_edit,
+        for w in (*self.tools.values(), self.shape_bar, self.clear_button, self.undo_button, self.redo_button, self.layers, self.xray, self.home, self.cube, self.pad, self.hist_bar, self.hist_edit, self.hist_vars,
                   self.t_editor, self.sk_bar, self.origin_label, *self.panels, self.dim_panel, self.dim, self.notice):
             w.raise_()
 
@@ -2026,6 +2063,9 @@ class StudioWindow(QMainWindow):
             self.view.set_preview_mesh(kernel.display_mesh(face) if face is not None else None, **blue)
     def view_clicked(self, x, y, shift, ctrl):
         if self.busy:
+            return
+        if self._repick is not None:
+            self._repick_click(x, y)
             return
         if self.mode == 'sketch' and self.tool == 'text' and self.txt is not None:
             if self.txt['stage'] == 'surface':
@@ -3202,6 +3242,22 @@ class StudioWindow(QMainWindow):
         self.setWindowTitle(f"{'● ' if self.document.dirty else ''}{name} — RCCAD")
 
     # ---------- historia ----------
+    def _hist_values(self):
+        """Wartości zmiennych projektu (nazwa -> liczba); błędne wyrażenia dają pusty słownik i komunikat."""
+        try:
+            return hist.variable_values(self.document.variables)
+        except kernel.CadError as exc:
+            self.toast(str(exc))
+            return {}
+
+    def _hist_ctx(self):
+        return hist.Context(self.document.constraints, self._hist_values())
+
+    def _hist_edit_close(self):
+        self.hist_edit.hide()
+        self.cancel_previews()
+        self.view.set_preview_mesh(None)
+
     def _hist_toggled(self, on):
         self.hist_bar.setVisible(on)
         self._hist_sig = None
@@ -3226,7 +3282,7 @@ class StudioWindow(QMainWindow):
         if not self.hist_bar.isVisible():
             return
         infos, current = self.document.infos()
-        sig = (tuple((i.get('label'), i.get('icon'), bool(i.get('stale')), bool(i.get('off')), i.get('note'), i.get('group')) for i in infos), current, bool(self.document.backup))
+        sig = (tuple((i.get('label'), i.get('icon'), bool(i.get('stale')), bool(i.get('off')), i.get('note'), i.get('group'), i.get('why')) for i in infos), current, bool(self.document.backup))
         self.hist_revert.setEnabled(bool(self.document.backup))
         if sig == self._hist_sig:
             return
@@ -3250,7 +3306,7 @@ class StudioWindow(QMainWindow):
                 tag = QLabel(group)
                 tag.setStyleSheet('color:#187ac1; font-size:11px; font-weight:700; background:transparent;')
                 self.hist_row.addWidget(tag)
-            chip.setToolTip(f"{i}. {info.get('note') or info.get('label', '')}" + (f"\n({info['label']})" if info.get('note') else '') + (f"\nGrupa: {group}" if group else '') + ('\nKrok wymaga poprawy (nie dało się go przeliczyć)' if info.get('stale') else '')
+            chip.setToolTip(f"{i}. {info.get('note') or info.get('label', '')}" + (f"\n({info['label']})" if info.get('note') else '') + (f"\nGrupa: {group}" if group else '') + (('\nBŁĄD: ' + info.get('why', 'nie dało się przeliczyć tego kroku')) if info.get('stale') else '')
                             + ('\nDwuklik: edytuj parametry' if editable else ''))
             style = []
             if i > current:      # cofnięte kroki: przerywany obrys, można do nich wrócić
@@ -3333,7 +3389,7 @@ class StudioWindow(QMainWindow):
             if failed:
                 self.toast(f'{failed} kroków nie dało się przeliczyć (oznaczone na czerwono) - popraw je albo cofnij zmianę.', 7000)
 
-        constraints = list(self.document.constraints)
+        constraints = self._hist_ctx()
         self.run_history(lambda job: change(states, constraints, job), apply)
 
     def _replay_deferred(self):
@@ -3351,7 +3407,7 @@ class StudioWindow(QMainWindow):
             self.selected, self.edges = [], {}
             self.toast(f'Wstawiono krok w środek historii, {failed} kroków wymaga poprawy (czerwone).' if failed else 'Wstawiono krok w środek historii, następne kroki przeliczone.', 4500)
 
-        constraints = list(self.document.constraints)
+        constraints = self._hist_ctx()
         self.run_history(lambda job: hist.rebuild(current, steps, constraints, job), apply)
 
     def history_revert(self):
@@ -3371,15 +3427,19 @@ class StudioWindow(QMainWindow):
         bodies, info = states[index]
         recipe = info.get('op')
         if self.hist_edit.isVisible():
-            self.hist_edit.hide()
+            self._hist_edit_close()
         lay = self.hist_edit_layout
         while lay.count():
             item = lay.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        title = QLabel(f"Edycja kroku {index}: {info.get('label', '')}")
+        title = QLabel(f"Edycja kroku {index}: {info.get('note') or info.get('label', '')}")
         title.setObjectName('ptitle')
         lay.addWidget(title)
+        if info.get('why'):
+            why = _label('Powód błędu: ' + info['why'], 'status')
+            why.setStyleSheet('color:#c0262b; background:transparent;')
+            lay.addWidget(why)
         if recipe and recipe.get('type') in hist.RUNNERS:
             fields = dict(kind='recipe', collect=self._recipe_form(recipe, lay))
         else:
@@ -3395,13 +3455,14 @@ class StudioWindow(QMainWindow):
                 drivers = [(b, i, f'{b.name}: {cap}') for b in bodies if b.kind == 'sketch' and b.id != target.id and b.meta and b.meta.get('tool') in sm.EDITABLE
                            for i, cap in enumerate(sm.LABELS.get(b.meta['tool'], ()))]
                 for n, (caption, value) in enumerate(zip(labels, sm.values(target.meta))):
-                    box = QLineEdit(value)
+                    formula = next((c['expr'] for c in self.document.constraints if c['b'] == target.id and c['bi'] == n and 'expr' in c), None)
+                    box = QLineEdit(formula or value)
                     lay.addWidget(_label(caption, 'psub'))
                     lay.addWidget(box)
                     edits.append(box)
                     link = QComboBox()       # więz: ten wymiar zawsze równy wymiarowi innego szkicu
                     link.addItem('Wymiar niezależny', None)
-                    current = next((c for c in self.document.constraints if c['b'] == target.id and c['bi'] == n), None)
+                    current = next((c for c in self.document.constraints if c['b'] == target.id and c['bi'] == n and 'a' in c), None)
                     for b, i, text in drivers:
                         link.addItem('= ' + text, (b.id, i))
                         if current and current['a'] == b.id and current['ai'] == i:
@@ -3417,8 +3478,14 @@ class StudioWindow(QMainWindow):
                 place.append(spin)
             fields = dict(kind='sketch', target=target, edits=edits, links=links, place=place, added=[b.id for b in new_bodies])
         self._hist_fields = fields
+        if recipe and recipe.get('type') in ('extrude', 'mod') and (info.get('stale') or recipe.get('type') == 'mod' or any(p.get('k') == 'face' for p in recipe.get('profiles', ()))):
+            pick = QPushButton('Wskaż ponownie w modelu…')
+            pick.setObjectName('chip')
+            pick.setToolTip('Model wraca do stanu sprzed kroku - kliknij ścianę, krawędź lub narożnik, których ma dotyczyć krok')
+            pick.clicked.connect(lambda _=False: self.history_repick(index, recipe))
+            lay.addWidget(pick)
         row = QHBoxLayout()
-        for text, cb in (('Zastosuj', lambda: self._history_edit_apply(index, fields)), ('Anuluj', self.hist_edit.hide)):
+        for text, cb in (('Zastosuj', lambda: self._history_edit_apply(index, fields)), ('Anuluj', self._hist_edit_close)):
             b = QPushButton(text)
             b.setObjectName('primary' if text == 'Zastosuj' else 'chip')
             b.clicked.connect(lambda _=False, f=cb: f())
@@ -3428,6 +3495,7 @@ class StudioWindow(QMainWindow):
         self.hist_edit.move(max(10, (self.view.width() - self.hist_edit.width()) // 2), self.hist_bar.y() - self.hist_edit.height() - 10)
         self.hist_edit.show()
         self.hist_edit.raise_()
+        self._hist_hook_preview(index, fields)
 
     def _recipe_form(self, recipe, lay):
         """Pola edycji parametrów kroku dla danego typu operacji; zwraca funkcję zbierającą nowy przepis."""
@@ -3437,16 +3505,17 @@ class StudioWindow(QMainWindow):
             return widget
 
         kind = recipe['type']
+        vals = self._hist_values()
         if kind == 'extrude':
             op = ui.Segmented([('Nowa', 'new', 'new'), ('Połącz', 'join', 'join'), ('Wytnij', 'cut', 'cut'), ('Wspólna', 'intersect', 'intersect')], 28)
             op.setCurrentIndex(['new', 'join', 'cut', 'intersect'].index(recipe['mode']))
             direction = ui.Segmented([('Jedna strona', 'one', 'one'), ('Symetrycznie', 'symmetric', 'sym'), ('Dwie strony', 'two', 'two')], 28)
             direction.setCurrentIndex(['one', 'symmetric', 'two'].index(recipe.get('dir', 'one')))
-            d1, d2 = _spin(float(recipe['d1']), -1e5, 1e5, 2, 1), _spin(float(recipe.get('d2', 0)), 0, 1e5, 2, 1)
+            d1, d2 = _ExprBox(recipe['d1'], vals), _ExprBox(recipe.get('d2', 0), vals)
             for caption, widget in (('Operacja', op), ('Kierunek', direction), ('Odległość (mm)', d1), ('Druga strona (mm)', d2)):
                 field(caption, widget)
             self._hist_fields_extrude = dict(d1=d1, d2=d2, op=op, dir=direction)
-            return lambda: dict(recipe, mode=op.currentData(), dir=direction.currentData(), d1=d1.value(), d2=d2.value())
+            return lambda: dict(recipe, mode=op.currentData(), dir=direction.currentData(), d1=d1.raw(), d2=d2.raw())
         if kind == 'text':
             q = recipe['params']
             text = QLineEdit(q['text'])
@@ -3473,20 +3542,20 @@ class StudioWindow(QMainWindow):
                 boxes.append(field(caption, QLineEdit(value)))
             return lambda: dict(recipe, meta=sm.apply_values(meta, [float(b.text().replace(',', '.')) for b in boxes]))
         if kind == 'transform':
-            spins = [_spin(float(c), -1e6, 1e6, 3, 1) for c in recipe['v']]
+            spins = [_ExprBox(c, vals) for c in recipe['v']]
             for caption, spin in zip(('X' if recipe['mode'] == 'move' else 'Obrót wokół X (°)', 'Y' if recipe['mode'] == 'move' else 'Obrót wokół Y (°)',
                                       'Z' if recipe['mode'] == 'move' else 'Obrót wokół Z (°)'), spins):
                 field(caption + (' (mm)' if recipe['mode'] == 'move' else ''), spin)
             self._hist_spins = spins
-            return lambda: dict(recipe, v=[x.value() for x in spins])
+            return lambda: dict(recipe, v=[x.raw() for x in spins])
         if kind == 'mod':
             mk = ui.Segmented([('Zaokrąglij', 'fillet', 'fillet'), ('Fazuj', 'chamfer', 'chamfer')], 28)
             mk.setCurrentIndex(['fillet', 'chamfer'].index(recipe['kind']))
-            size = _spin(float(recipe['size']), .01, 1e5, 2, .5)
+            size = _ExprBox(recipe['size'], vals)
             field('Operacja', mk)
             field('Promień / odległość (mm)', size)
             self._hist_spins = [size]
-            return lambda: dict(recipe, kind=mk.currentData(), size=size.value())
+            return lambda: dict(recipe, kind=mk.currentData(), size=size.raw())
         if kind == 'mirror':
             keep, join = QCheckBox('Zachowaj oryginał'), QCheckBox('Połącz z oryginałem (bryły)')
             keep.setChecked(bool(recipe.get('keep')))
@@ -3506,14 +3575,14 @@ class StudioWindow(QMainWindow):
             p, sp = dict(recipe['params']), []
             if recipe['kind'] == 'rect':
                 counts = [_spin(float(c), 1, 200, 0, 1) for c in p['counts']]
-                gaps = [_spin(float(c), -1e5, 1e5, 2, 1) for c in p['spacing']]
+                gaps = [_ExprBox(c, vals) for c in p['spacing']]
                 for axis, c, g in zip('XYZ', counts, gaps):
                     field(f'Ilość {axis}', c)
                     field(f'Odstęp {axis} (mm)', g)
                 sp = counts + gaps
-                params = lambda: dict(p, counts=[int(round(c.value())) for c in counts], spacing=[g.value() for g in gaps])
+                params = lambda: dict(p, counts=[int(round(c.value())) for c in counts], spacing=[g.raw() for g in gaps])
             elif recipe['kind'] == 'circ':
-                count, angle, radius = _spin(float(p['count']), 1, 400, 0, 1), _spin(float(p['angle']), -360, 360, 1, 5), _spin(float(p['radius']), 0, 1e5, 2, 1)
+                count, angle, radius = _spin(float(p['count']), 1, 400, 0, 1), _ExprBox(p['angle'], vals), _ExprBox(p['radius'], vals)
                 pivot = [_spin(float(c), -1e6, 1e6, 2, 1) for c in p['pivot']]
                 field('Ilość kopii', count)
                 field('Kąt łączny (°)', angle)
@@ -3521,16 +3590,16 @@ class StudioWindow(QMainWindow):
                 for axis, c in zip('XYZ', pivot):
                     field(f'Środek {axis} (mm)', c)
                 sp = [count, angle, radius, *pivot]
-                params = lambda: dict(p, count=int(round(count.value())), angle=angle.value(), radius=radius.value(), pivot=[c.value() for c in pivot])
+                params = lambda: dict(p, count=int(round(count.value())), angle=angle.raw(), radius=radius.raw(), pivot=[c.value() for c in pivot])
             else:
-                count, spacing = _spin(float(p['count']), 1, 400, 0, 1), _spin(float(p['spacing']), .01, 1e5, 2, 1)
+                count, spacing = _spin(float(p['count']), 1, 400, 0, 1), _ExprBox(p['spacing'], vals)
                 fit = QCheckBox('Rozłóż równo na całej ścieżce')
                 fit.setChecked(bool(p.get('fit', True)))
                 field('Ilość kopii', count)
                 lay.addWidget(fit)
                 field('Odstęp (mm)', spacing)
                 sp = [count, spacing]
-                params = lambda: dict(p, count=int(round(count.value())), fit=fit.isChecked(), spacing=spacing.value())
+                params = lambda: dict(p, count=int(round(count.value())), fit=fit.isChecked(), spacing=spacing.raw())
             join = QCheckBox('Połącz kopie w jedną bryłę')
             join.setChecked(bool(recipe.get('join')))
             lay.addWidget(join)
@@ -3542,24 +3611,34 @@ class StudioWindow(QMainWindow):
         states = self.document.states()
         bodies, info = states[index]
         constraints = list(self.document.constraints)
+        values_now = self._hist_values()
         try:
             if fields['kind'] == 'recipe':
                 recipe = fields['collect']()
                 new_info = dict(info, op=recipe)
 
                 def first():
-                    return hist.run_recipe(states[index - 1][0], recipe)
+                    return hist.run_recipe(states[index - 1][0], recipe, values_now)
             else:
                 target, new_info = fields['target'], info
                 shift = [x.value() for x in fields['place']]
                 meta = shape = None
                 if target is not None:
-                    values = [float(box.text().replace(',', '.')) for box in fields['edits']]
-                    meta = sm.apply_values(target.meta, values)
+                    numbers, formulas = [], {}
+                    for n, box in enumerate(fields['edits']):
+                        text = box.text().strip()
+                        try:
+                            numbers.append(float(text.replace(',', '.')))
+                        except ValueError:      # wyrażenie ze zmiennych projektu: wymiar zostaje z nim powiązany
+                            numbers.append(hist.evaluate(text, values_now))
+                            formulas[n] = text
+                    meta = sm.apply_values(target.meta, numbers)
                     shape = self._meta_shape(target.plane, meta)
                     constraints = [c for c in constraints if c['b'] != target.id]
+                    for n, text in formulas.items():
+                        constraints.append(dict(b=target.id, bi=n, expr=text))
                     for n, link in enumerate(fields['links']):
-                        if link.currentData():
+                        if link.currentData() and n not in formulas:
                             constraints.append(dict(a=link.currentData()[0], ai=link.currentData()[1], b=target.id, bi=n, k=1.0))
 
                 def first():
@@ -3570,22 +3649,204 @@ class StudioWindow(QMainWindow):
         except (ValueError, kernel.CadError) as exc:
             self.toast(str(exc) or 'Wpisz poprawne liczby.')
             return
-        self.hist_edit.hide()
+        self._hist_edit_close()
 
         def build(job):
             edited = first()
             patched = list(states)
             patched[index] = (bodies, new_info)
-            return hist.recompute(patched, index, edited, constraints, job)
+            return hist.recompute(patched, index, edited, hist.Context(constraints, values_now), job)
 
         def apply(result):
             new_states, failed = result
             self.document.rewrite(new_states, len(new_states) - 1, constraints)
             self.selected, self.edges = [], {}
             if failed:
-                self.toast(f'{failed} kroków nie dało się przeliczyć (oznaczone na czerwono) - popraw je albo cofnij edycję.', 7000)
+                self.toast(f'{failed} kroków nie dało się przeliczyć (oznaczone na czerwono, powód w dymku) - popraw je albo cofnij edycję.', 7000)
 
         self.run_history(build, apply)
+
+    # ---------- podgląd na żywo parametrów kroku, ponowne wskazanie elementu, zmienne projektu ----------
+    def _hist_hook_preview(self, index, fields):
+        if fields['kind'] != 'recipe':
+            return
+        timer = getattr(self, '_hist_preview_timer', None)
+        if timer is None:
+            timer = self._hist_preview_timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.setInterval(220)
+        try:
+            timer.timeout.disconnect()
+        except Exception:
+            pass
+        timer.timeout.connect(lambda: self._hist_edit_preview(index, fields))
+        poke = lambda *_: timer.start()
+        for w in self.hist_edit.findChildren(QDoubleSpinBox):
+            w.valueChanged.connect(poke)
+        for w in self.hist_edit.findChildren(QLineEdit):
+            w.textChanged.connect(poke)
+        for w in self.hist_edit.findChildren(QCheckBox):
+            w.toggled.connect(poke)
+        for w in self.hist_edit.findChildren(ui.Segmented):
+            w.currentIndexChanged.connect(poke)
+        timer.start()
+
+    def _hist_edit_preview(self, index, fields):
+        if not self.hist_edit.isVisible() or self.busy:
+            return
+        try:
+            recipe = fields['collect']()
+        except Exception:
+            return
+        base, values = self.document.states()[index - 1][0], self._hist_values()
+
+        def compute():
+            result = hist.run_recipe(base, recipe, values)
+            solids = [kernel.display_mesh(b.shape, PREVIEW_TOL) for b in result if b.kind == 'solid' and b.visible]
+            return _merge_meshes(solids) if solids else None
+
+        def show(mesh, error):
+            if not self.hist_edit.isVisible():
+                return
+            if error or mesh is None:
+                self.view.set_preview_mesh(None)
+                return
+            self.view.set_preview_mesh(mesh, color=(.95, .55, .2, .32), line_color=(.55, .3, .05, 1), width=2)
+
+        self.run_preview('histedit', compute, show)
+
+    def history_repick(self, index, recipe):
+        """Naprawa czerwonego kroku: model wraca do stanu sprzed kroku, a użytkownik wskazuje ponownie ścianę / krawędź / narożnik."""
+        self._hist_edit_close()
+        self.history_goto(index - 1)
+        self._repick = dict(index=index, recipe=recipe)
+        self.toast('Kliknij ścianę (wyciągnięcie) albo krawędź / narożnik (faza, zaokrąglenie) w modelu sprzed tego kroku. Esc - anuluj.', 7000)
+
+    def _repick_click(self, x, y):
+        info = self._repick
+        recipe = info['recipe']
+        bodies = self.document.bodies
+        try:
+            if recipe['type'] == 'extrude':
+                hit = self.view.pick_face(x, y)
+                body = self.document.get(hit[0]) if hit else None
+                if body is None or body.kind != 'solid':
+                    self.toast('Kliknij płaską ścianę bryły.')
+                    return
+                face, normal = kernel.face_at(body.shape, hit[1], hit[2])
+                src = dict(kind='face', id=body.id, face=face, normal=tuple(float(c) for c in normal), center=face.Center().toTuple(), hit=tuple(float(c) for c in hit[2]))
+                new = dict(recipe, profiles=hist.describe_profiles([src], bodies))
+            else:
+                vertex = self.view.nearest_vertex(x, y)
+                if vertex is not None:
+                    body = self.document.get(vertex[0])
+                    point = np.asarray(vertex[1], float)
+                    new = dict(recipe, id=body.id, verts=[[float(c) for c in point]], vrefs=hist.vertex_refs(body.shape, [point]), edges=[])
+                else:
+                    edge = self.view.nearest_edge(x, y, True)
+                    if edge is None:
+                        self.toast('Kliknij krawędź lub narożnik bryły.')
+                        return
+                    body = self.document.get(edge[0])
+                    new = dict(recipe, id=body.id, verts=[], vrefs=[], edges=hist.edge_refs(body.shape, [edge[1]]))
+        except kernel.CadError as exc:
+            self.toast(str(exc))
+            return
+        self._repick = None
+        self._history_edit_apply(info['index'], dict(kind='recipe', collect=lambda: new))
+
+    def history_variables(self):
+        """Panel zmiennych projektu (nazwa = wyrażenie); zmiana przelicza całą historię."""
+        panel = self.hist_vars
+        lay = self.hist_vars_layout
+        while lay.count():
+            item = lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+            elif item.layout():
+                while item.layout().count():
+                    w = item.layout().takeAt(0).widget()
+                    if w:
+                        w.deleteLater()
+        title = QLabel('Zmienne projektu')
+        title.setObjectName('ptitle')
+        lay.addWidget(title)
+        lay.addWidget(_label('Użyj nazwy w polach kroków (np. szerokość / 2). Późniejsze zmienne mogą korzystać z wcześniejszych.', 'psub'))
+        self._var_rows = []
+        rows = QVBoxLayout()
+        lay.addLayout(rows)
+
+        def add_row(name='', expr=''):
+            row = QHBoxLayout()
+            n, e = QLineEdit(name), QLineEdit(expr)
+            n.setPlaceholderText('nazwa')
+            e.setPlaceholderText('wartość lub wyrażenie')
+            drop = QToolButton()
+            drop.setText('✕')
+            row.addWidget(n, 1)
+            row.addWidget(e, 2)
+            row.addWidget(drop)
+            rows.addLayout(row)
+            entry = (n, e)
+            self._var_rows.append(entry)
+
+            def remove():
+                self._var_rows.remove(entry)
+                for w in (n, e, drop):
+                    w.hide()
+                    w.deleteLater()
+            drop.clicked.connect(remove)
+
+        for name, expr in self.document.variables.items():
+            add_row(name, expr)
+        if not self.document.variables:
+            add_row()
+        more = QPushButton('Dodaj zmienną')
+        more.setObjectName('chip')
+        more.clicked.connect(lambda: (add_row(), panel.adjustSize()))
+        lay.addWidget(more)
+        row = QHBoxLayout()
+        for text, cb in (('Zastosuj', self._history_variables_apply), ('Zamknij', panel.hide)):
+            b = QPushButton(text)
+            b.setObjectName('primary' if text == 'Zastosuj' else 'chip')
+            b.clicked.connect(lambda _=False, f=cb: f())
+            row.addWidget(b)
+        lay.addLayout(row)
+        panel.adjustSize()
+        panel.move(max(10, (self.view.width() - panel.width()) // 2), max(10, self.hist_bar.y() - panel.height() - 10))
+        panel.show()
+        panel.raise_()
+
+    def _history_variables_apply(self):
+        variables = {}
+        for n, e in self._var_rows:
+            name, expr = n.text().strip(), e.text().strip()
+            if not name and not expr:
+                continue
+            if not name.isidentifier() or name in hist._FUNCTIONS or name == 'pi':
+                self.toast(f'Nazwa zmiennej „{name}” jest nieprawidłowa (litery, cyfry i _; bez spacji, nie zaczyna się od cyfry).')
+                return
+            if name in variables:
+                self.toast(f'Zmienna „{name}” jest zdefiniowana dwa razy.')
+                return
+            variables[name] = expr
+        try:
+            values = hist.variable_values(variables)
+        except kernel.CadError as exc:
+            self.toast(str(exc))
+            return
+        if self.busy:
+            return
+        self.hist_vars.hide()
+        states, constraints = self.document.states(), list(self.document.constraints)
+
+        def apply(result):
+            new_states, failed = result
+            self.document.rewrite(new_states, len(new_states) - 1, constraints, variables)
+            self.selected, self.edges = [], {}
+            self.toast(f'Zmienne zastosowane, {failed} kroków wymaga poprawy.' if failed else 'Zmienne zastosowane, historia przeliczona.', 4000)
+
+        self.run_history(lambda job: hist.recompute_all(states, hist.Context(constraints, values), job), apply)
 
     def run_history(self, build, apply):
         """Przeliczanie historii w tle z paskiem postępu; Esc przerywa (model zostaje bez zmian)."""
@@ -3896,6 +4157,12 @@ class StudioWindow(QMainWindow):
     # =====================================================================
     def keyPressEvent(self, event):
         key = event.key()
+        if key == Qt.Key_Escape and self._repick is not None and not self.busy:
+            self._repick = None
+            self.history_goto(len(self.document.infos()[0]) - 1)
+            self.toast('Anulowano ponowne wskazywanie.', 2500)
+            event.accept()
+            return
         if self.busy:
             if key == Qt.Key_Escape and self._hist_job is not None:
                 self._hist_job['cancel'] = True

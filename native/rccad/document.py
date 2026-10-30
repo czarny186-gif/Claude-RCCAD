@@ -37,6 +37,7 @@ class Document:
         self._redo = []
         self.info = {'label': 'Początek', 'icon': 'start'}
         self.constraints = []   # więzy wymiarów między szkicami: {a, ai, b, bi, k} - wymiar bi szkicu b = k * wymiar ai szkicu a
+        self.variables = {}     # zmienne projektu: nazwa -> wyrażenie (liczone po kolei), używane w polach {'expr': ...}
         self.backup = None   # poprzednia oś czasu sprzed edycji kroku historii (do cofnięcia edycji)
         self.path: Path | None = None
         self._revision = 0
@@ -152,11 +153,13 @@ class Document:
         """Pełna oś czasu: lista (bryły, info) od pierwszego kroku."""
         return [(e[0], e[2]) for e in self._undo] + [(self.bodies, self.info)] + [(e[0], e[2]) for e in reversed(self._redo)]
 
-    def rewrite(self, states, current, constraints=None):
+    def rewrite(self, states, current, constraints=None, variables=None):
         """Podmienia całą oś czasu (po edycji kroku i przeliczeniu następnych); poprzednią (z więzami) zachowuje do cofnięcia edycji."""
-        self.backup = (self.states(), len(self._undo), list(self.constraints))
+        self.backup = (self.states(), len(self._undo), list(self.constraints), dict(self.variables))
         if constraints is not None:
             self.constraints = list(constraints)
+        if variables is not None:
+            self.variables = dict(variables)
         self._set_states(states, current)
 
     def set_info(self, index, **values):
@@ -174,9 +177,9 @@ class Document:
 
     def restore_backup(self):
         if self.backup:
-            states, current, constraints = self.backup
+            states, current, constraints, variables = self.backup
             self.backup = None
-            self.constraints = constraints
+            self.constraints, self.variables = constraints, variables
             self._set_states(states, current)
 
     def _set_states(self, states, current):
@@ -214,7 +217,7 @@ class Document:
         states = self.states()
         older = self._undo
         shapes, index = [], {}
-        manifest = {"app": "RCCAD_DESKTOP", "version": 2, "units": "mm", "shapes": [], "states": [], "current": len(older), "constraints": self.constraints}
+        manifest = {"app": "RCCAD_DESKTOP", "version": 2, "units": "mm", "shapes": [], "states": [], "current": len(older), "constraints": self.constraints, "variables": self.variables}
         temp_path = None
         try:
             fd, temp_path = tempfile.mkstemp(prefix=".rccad-", suffix=".tmp", dir=path.parent)
@@ -232,7 +235,7 @@ class Document:
                             archive.write(source, f"shapes/{index[key]}.brep")
                             manifest['shapes'].append(f"shapes/{index[key]}.brep")
                         entries.append(self._entry(body, index[key]))
-                    manifest['states'].append(dict(label=info.get('label', ''), icon=info.get('icon', 'move'), op=info.get('op'), stale=bool(info.get('stale')), off=bool(info.get('off')), note=info.get('note'), group=info.get('group'), bodies=entries))
+                    manifest['states'].append(dict(label=info.get('label', ''), icon=info.get('icon', 'move'), op=info.get('op'), stale=bool(info.get('stale')), off=bool(info.get('off')), note=info.get('note'), group=info.get('group'), why=info.get('why'), bodies=entries))
                 archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False))
             os.replace(temp_path, path)
             self.path = path
@@ -320,13 +323,17 @@ class Document:
                         info['stale'] = True
                     if state.get('off'):
                         info['off'] = True
-                    for key in ('note', 'group'):
+                    for key in ('note', 'group', 'why'):
                         if isinstance(state.get(key), str) and state[key]:
                             info[key] = state[key][:80]
                     built.append((tuple(bodies), info))
                 cons = manifest.get('constraints', [])
                 if isinstance(cons, list):
-                    result.constraints = [dict(a=str(c['a']), ai=int(c['ai']), b=str(c['b']), bi=int(c['bi']), k=float(c.get('k', 1.0))) for c in cons if isinstance(c, dict)]
+                    result.constraints = [dict(b=str(c['b']), bi=int(c['bi']), expr=str(c['expr'])) if 'expr' in c else
+                                          dict(a=str(c['a']), ai=int(c['ai']), b=str(c['b']), bi=int(c['bi']), k=float(c.get('k', 1.0))) for c in cons if isinstance(c, dict)]
+                variables = manifest.get('variables', {})
+                if isinstance(variables, dict):
+                    result.variables = {str(k)[:40]: str(v)[:200] for k, v in variables.items()}
                 result._next_revision = 1
                 revisions = list(range(1, len(built) + 1))
                 result._next_revision = len(built) + 1
