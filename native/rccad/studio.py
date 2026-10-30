@@ -401,6 +401,8 @@ class StudioWindow(QMainWindow):
         hl.addWidget(self.hist_status)
         self._hist_job = None
         self._hist_folded = set()
+        self._hist_widgets = {}
+        self._hist_stretch = False
         self._hist_filter = 'Wszystkie kroki'
         self._hist_tick = QTimer(self)
         self._hist_tick.setInterval(120)
@@ -2404,13 +2406,16 @@ class StudioWindow(QMainWindow):
         makers = self._make_tools()
         existing = list(self.document.bodies)
         spent = self._consumed_sketches(self.ex_profiles)
-        recipe = dict(type='extrude', mode=op, dir=self.ex_dir.currentData(), d1=self.ex_value.value(), d2=self.ex_second.value(),
-                      profiles=hist.describe_profiles(self.ex_profiles, existing), spent=sorted(spent), out=[uuid.uuid4().hex for _ in makers])
+        profiles, direction, d1, d2 = list(self.ex_profiles), self.ex_dir.currentData(), self.ex_value.value(), self.ex_second.value()
+        out = [uuid.uuid4().hex for _ in makers]
 
         def build():
-            return hist.combine(existing, [m() for m in makers], op, spent, recipe['out'])
+            bodies = hist.combine(existing, [m() for m in makers], op, spent, out)
+            recipe = dict(type='extrude', mode=op, dir=direction, d1=d1, d2=d2, profiles=hist.describe_profiles(profiles, existing), spent=sorted(spent), out=out)
+            return bodies, recipe      # zapis kroku do historii liczy się w tle razem z operacją
 
-        def apply(bodies):
+        def apply(result):
+            bodies, recipe = result
             self.document.pending_op = recipe
             self.document.commit(bodies)
             self.selected = [bodies[-1].id] if op == 'new' else []
@@ -2710,17 +2715,19 @@ class StudioWindow(QMainWindow):
         body = self.document.get(bid)
         size, kind = self.mod_size.value(), self.mod_kind.currentData()
 
-        recipe = dict(type='mod', id=body.id, kind=kind, size=size, verts=[[float(c) for c in q] for q in points] if verts else [], vrefs=hist.vertex_refs(body.shape, points) if verts else [],
-                      edges=[] if verts else hist.edge_refs(body.shape, ids))
+        def recipe_of():      # odwołania do krawędzi / narożników liczone w tle, razem z operacją (nie blokują interfejsu)
+            return dict(type='mod', id=body.id, kind=kind, size=size, verts=[[float(c) for c in q] for q in points] if verts else [], vrefs=hist.vertex_refs(body.shape, points) if verts else [],
+                        edges=[] if verts else hist.edge_refs(body.shape, ids))
 
-        def apply(new):
+        def apply(result):
+            new, recipe = result
             self.document.pending_op = recipe
             self.document.commit([new if b.id == body.id else b for b in self.document.bodies])
             self.selected = [body.id]
 
         self.view.set_preview_mesh(None)
         self.view.set_handles([])
-        work = (lambda: body.changed(kernel.blend_vertices(body.shape, points, size, kind))) if verts else (lambda: body.changed(kernel.blend(body.shape, ids, size, kind)))
+        work = (lambda: (body.changed(kernel.blend_vertices(body.shape, points, size, kind)), recipe_of())) if verts else (lambda: (body.changed(kernel.blend(body.shape, ids, size, kind)), recipe_of()))
         self.run_operation('Zaokrąglanie' if kind == 'fillet' else 'Fazowanie', work, apply, after=lambda: self.set_mode(None))
 
     # =====================================================================
@@ -3289,31 +3296,62 @@ class StudioWindow(QMainWindow):
         self._compare_on = bool(meshes)
         self.view.set_selection_meshes(meshes or None, color=(.9, .2, .2, .22), line_color=(.8, .1, .1, 1))
 
+    def _hist_icon(self, key):
+        cache = self.__dict__.setdefault('_hist_icons', {})
+        if key not in cache:
+            cache[key] = QIcon(ui.icons.pixmap('t_' + hist.ICONS.get(key, 'move'), 26))
+        return cache[key]
+
+    @staticmethod
+    def _hist_chip_style(i, info, current):
+        style = []
+        if i > current:      # cofnięte kroki: przerywany obrys, można do nich wrócić
+            style.append('border-style:dashed; border-color:#9fb2c4;')
+        if info.get('group'):
+            style.append('border-top:3px solid #187ac1;')
+        if info.get('off'):      # krok wyłączony: wygaszony symbol
+            style.append('background:#e6ecf2; border-style:dotted; border-color:#9fb2c4;')
+        if info.get('stale'):
+            style.append('border:2px solid #e5262b;')
+        return 'QToolButton#padTool { ' + ' '.join(style) + ' }' if style else ''
+
     def _hist_update(self):
+        """Pasek historii jest uaktualniany przyrostowo: nowy krok dodaje jeden symbol, skok w historii tylko zmienia obrysy
+        (bez tworzenia widżetów), więc praca nad projektem nie zwalnia nawet przy setkach kroków."""
         if not self.hist_bar.isVisible():
             return
         infos, current = self.document.infos()
-        sig = (tuple((i.get('label'), i.get('icon'), bool(i.get('stale')), bool(i.get('off')), i.get('note'), i.get('group'), i.get('why')) for i in infos), current, bool(self.document.backup), tuple(sorted(self._hist_folded)), self._hist_filter)
         self.hist_revert.setEnabled(bool(self.document.backup))
-        if sig == self._hist_sig:
+        keyed = [(i.get('label'), i.get('icon'), bool(i.get('stale')), bool(i.get('off')), i.get('note'), i.get('group'), i.get('why')) for i in infos]
+        mode = (tuple(sorted(self._hist_folded)), self._hist_filter)
+        old = self._hist_sig
+        if old is not None and old == (keyed, current, mode):
             return
-        self._hist_sig = sig
-        while self.hist_row.count():
-            item = self.hist_row.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+        full = old is None or old[2] != mode or (old[1] != current and (self._hist_folded or self._hist_filter != 'Wszystkie kroki'))
+        prefix = 0
+        if not full:
+            old_keyed = old[0]
+            limit = min(len(old_keyed), len(keyed))
+            while prefix < limit and old_keyed[prefix] == keyed[prefix]:
+                prefix += 1
+        self._hist_sig = (keyed, current, mode)
+        widgets = self._hist_widgets
+        if self._hist_stretch and self.hist_row.count():
+            self.hist_row.takeAt(self.hist_row.count() - 1)
+            self._hist_stretch = False
+        for j in [j for j in widgets if j >= prefix]:
+            for w in widgets.pop(j):
+                self.hist_row.removeWidget(w)
+                w.deleteLater()
         active = None
-        for i, info in enumerate(infos):
-            chip = _HistChip()
-            chip.setObjectName('padTool')
-            chip.setIcon(QIcon(ui.icons.pixmap('t_' + hist.ICONS.get(info.get('icon'), 'move'), 26)))
-            chip.setIconSize(QSize(26, 26))
-            chip.setFixedSize(42, 38)
-            chip.setCheckable(True)
-            chip.setChecked(i == current)
-            editable = bool(info.get('op')) or info.get('icon') == 'sketch'
+        for i in range(prefix, len(infos)):
+            info = infos[i]
             group = info.get('group')
             folded = bool(group) and group in self._hist_folded and not (infos[current].get('group') == group)
+            starts = bool(group) and (i == 0 or infos[i - 1].get('group') != group)
+            if (folded and not starts) or (not folded and i != current and i != 0 and not hist.passes_filter(info, self._hist_filter)):
+                continue
+            made = []
             if group and (i == 0 or infos[i - 1].get('group') != group):
                 size = sum(1 for x in infos[i:] if x.get('group') == group)
                 tag = QPushButton(('▸ ' if folded else '▾ ') + group + (f' ({size})' if folded else ''))
@@ -3323,32 +3361,41 @@ class StudioWindow(QMainWindow):
                 tag.setStyleSheet('color:#187ac1; font-size:11px; font-weight:700; background:transparent; border:none; padding:0 4px;')
                 tag.clicked.connect(lambda _=False, g=group: self._hist_fold(g))
                 self.hist_row.addWidget(tag)
-            if folded or (i != current and i != 0 and not hist.passes_filter(info, self._hist_filter)):
-                chip.deleteLater()
+                made.append(tag)
+            if folded:
+                widgets[i] = made
                 continue
+            chip = _HistChip()
+            chip.setObjectName('padTool')
+            chip.setIcon(self._hist_icon(info.get('icon')))
+            chip.setIconSize(QSize(26, 26))
+            chip.setFixedSize(42, 38)
+            chip.setCheckable(True)
+            editable = bool(info.get('op')) or info.get('icon') == 'sketch'
             chip.setToolTip(f"{i}. {info.get('note') or info.get('label', '')}" + (f"\n({info['label']})" if info.get('note') else '') + (f"\nGrupa: {group}" if group else '') + (('\nBŁĄD: ' + info.get('why', 'nie dało się przeliczyć tego kroku')) if info.get('stale') else '')
-                            + ('\nDwuklik: edytuj parametry' if editable else ''))
-            style = []
-            if i > current:      # cofnięte kroki: przerywany obrys, można do nich wrócić
-                style.append('border-style:dashed; border-color:#9fb2c4;')
-            if group:
-                style.append('border-top:3px solid #187ac1;')
-            if info.get('off'):      # krok wyłączony: wygaszony symbol
-                style.append('background:#e6ecf2; border-style:dotted; border-color:#9fb2c4;')
-                chip.setToolTip(chip.toolTip() + '\nKrok wyłączony (pomijany)')
-            if info.get('stale'):
-                style.append('border:2px solid #e5262b;')
-            if style:
-                chip.setStyleSheet('QToolButton#padTool { ' + ' '.join(style) + ' }')
+                            + ('\nDwuklik: edytuj parametry' if editable else '') + ('\nKrok wyłączony (pomijany)' if info.get('off') else ''))
             chip.clicked.connect(lambda _=False, n=i: self.history_goto(n))
             chip.editRequested.connect(lambda n=i: self.history_edit(n))
             if i:
                 chip.setContextMenuPolicy(Qt.CustomContextMenu)
                 chip.customContextMenuRequested.connect(lambda pos, n=i, c=chip: self._history_menu(n, c.mapToGlobal(pos)))
             self.hist_row.addWidget(chip)
+            made.append(chip)
+            widgets[i] = made
+        # obrysy i zaznaczenie wszystkich symboli (tanie: bez tworzenia widżetów, arkusz stylu ustawiany tylko przy zmianie)
+        for i, made in widgets.items():
+            chip = made[-1]
+            if not isinstance(chip, _HistChip):
+                continue
+            chip.setChecked(i == current)
+            sheet = self._hist_chip_style(i, infos[i], current)
+            if chip.property('sheet') != sheet:
+                chip.setProperty('sheet', sheet)
+                chip.setStyleSheet(sheet)
             if i == current:
                 active = chip
         self.hist_row.addStretch(1)
+        self._hist_stretch = True
         if active is not None:
             QTimer.singleShot(0, lambda a=active: self.hist_scroll.ensureWidgetVisible(a, 40, 0) if a.parent() else None)
 

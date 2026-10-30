@@ -193,6 +193,9 @@ class StudioTests(unittest.TestCase):
         w.hist_ghost.setChecked(True);self.assertTrue(w.view._cache[sk.id][1])
         w.history_goto(cur-1);self.assertTrue(w.document.get(sk.id).visible);self.assertEqual(len([b for b in w.document.bodies if b.kind=='solid']),0)
         w.history_goto(cur);self.assertEqual(len([b for b in w.document.bodies if b.kind=='solid']),1)
+        chips=list(w._hist_widgets.values());w.history_goto(cur-1);self.assertEqual(list(w._hist_widgets.values()),chips)      # skok w historii nie tworzy widżetów od nowa
+        w.history_goto(cur);self.assertEqual(len(w._hist_widgets),len(labels));self.assertTrue(w._hist_widgets[cur][-1].isChecked())
+        self.sketch('rect',(40,0),(50,10));self.assertEqual(len(w._hist_widgets),len(labels)+1);self.assertEqual(list(w._hist_widgets.values())[:len(chips)],chips)    # nowy krok dodaje jeden symbol
 
     def test_history_edit_recomputes_following_steps_and_can_be_reverted(self):
         w=self.w;self.sketch('rect',(0,0),(20,10));sk=w.document.bodies[0];w.set_mode('extrude');self.pick_sketch_profile(sk)
