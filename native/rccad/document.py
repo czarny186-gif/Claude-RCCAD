@@ -118,6 +118,7 @@ class Document:
                 if hit is None or hit[0] is not b.shape:
                     if len(self._mesh_cache) > 600:
                         self._mesh_cache.clear()
+                    valid(b.shape, b.kind == 'solid')
                     hit = self._mesh_cache[id(b.shape)] = (b.shape, display_mesh(b.shape))
                 b = replace(b, mesh=hit[1])
             out.append(b)
@@ -339,7 +340,8 @@ class Document:
                         source = Path(work) / f'{number}.brep'
                         source.write_bytes(archive.read(files[number]))
                         shape = cq.importers.importBrep(str(source)).val()
-                        valid(shape, kind == 'solid')
+                        if shape is None or shape.wrapped.IsNull() or (kind == 'solid' and not shape.Solids()):      # pełna walidacja (isValid) przy pierwszym pokazaniu stanu
+                            raise CadError("Nieprawidłowa geometria w projekcie.")
                         cache[number] = (shape, None)
                     return cache[number]
 
