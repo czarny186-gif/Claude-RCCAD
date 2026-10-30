@@ -45,9 +45,12 @@ class Scenario:
         """Wynik wykonania wszystkich kroków od zera (opcjonalnie z podmienionym krokiem `index`)."""
         bodies = ()
         for n, (kind, payload, _) in enumerate(self.items, 1):
-            if n == index:
-                payload = replacement
-            bodies = tuple(payload(bodies)) if kind == 'raw' else h.run_recipe(bodies, payload)
+            if kind == 'raw':
+                bodies = tuple(payload(bodies))
+                if n == index:
+                    bodies = tuple(replacement(bodies))      # krok bez przepisu: zmiana jego wyniku (jak edycja szkicu w panelu)
+            else:
+                bodies = h.run_recipe(bodies, replacement if n == index else payload)
         return bodies
 
     def edit(self, index, replacement):
@@ -57,7 +60,7 @@ class Scenario:
         kind = self.items[index - 1][0]
         before = states[index - 1][0]
         if kind == 'raw':
-            first = tuple(replacement(before))
+            first = tuple(replacement(states[index][0]))
             patched = states
         else:
             first = h.run_recipe(before, replacement)
