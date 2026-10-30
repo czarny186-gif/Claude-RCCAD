@@ -209,7 +209,10 @@ class ScenarioTests(unittest.TestCase):
         faces = h.material_regions(top, letters)
         srcs = [dict(kind='region', id=None, face=f, wire=f.outerWire(), plane=top, normal=(0, 0, 1), center=f.Center().toTuple()) for f in faces]
         specs = h.describe_profiles(srcs, sc.doc.bodies)
-        self.assertEqual([x['k'] for x in specs], ['textgroup'], f'obszary={len(h._group_regions(top, letters))} materiał={len(faces)}')
+        info = [(x['k'], (x.get('anchor') or {}).get('id', '')[:14], h.text_group_of((x.get('anchor') or {}).get('id')) == group) for x in specs]
+        grp = h.sketch_groups(sc.doc.bodies).get(h.plane_key(top))
+        members = [b for b in (grp[1] if grp else []) if h.text_group_of(b.id) == group]
+        self.assertEqual([x['k'] for x in specs], ['textgroup'], f'obszary={len(h._group_regions(top, letters))} materiał={len(faces)} litery={len(letters)} grupa={len(members)} specs={info}')
         sc.op(dict(type='extrude', mode='join', dir='one', d1=2.0, d2=0, profiles=specs, spent=[b.id for b in letters], out=[]), 'Napis')
         holes = []
         for frame, u in ((k.Frame((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, -1.0, 0.0)), 20.0), (k.Frame((0.0, 30.0, 0.0), (-1.0, 0.0, 0.0), (0.0, 1.0, 0.0)), 20.0)):
