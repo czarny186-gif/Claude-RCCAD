@@ -186,7 +186,22 @@ def text_group_of(identifier):
 
 
 def _group_regions(plane, members):
-    return kernel.regions(plane, [e for b in members for e in b.shape.Edges()], [b.shape for b in members if b.shape.IsClosed()])
+    """Obszary szkiców w płaszczyźnie. Pojedynczy kształt (np. jeden okrąg) nie przechodzi przez General Fuse - wtedy obszarem jest ściana z jego konturu
+    (tak samo jak przy wskazywaniu obszaru w oknie), inaczej przeliczenie historii gubiłoby takie kroki."""
+    try:
+        faces = kernel.regions(plane, [e for b in members for e in b.shape.Edges()], [b.shape for b in members if b.shape.IsClosed()])
+    except Exception:
+        faces = []
+    if faces:
+        return faces
+    out = []
+    for b in members:
+        try:
+            if b.shape.IsClosed():
+                out.append(cq.Face.makeFromWires(b.shape))
+        except Exception:
+            continue
+    return out
 
 
 def _inner_point(face):
@@ -300,7 +315,7 @@ def resolve_profile(bodies, spec):
         if group is None:
             raise kernel.CadError('Brak szkiców w płaszczyźnie tego kroku.')
         plane, members = group
-        faces = kernel.regions(plane, [e for b in members for e in b.shape.Edges()], [b.shape for b in members if b.shape.IsClosed()])
+        faces = _group_regions(plane, members)
         if not faces:
             raise kernel.CadError('Szkic nie tworzy już zamkniętego obszaru.')
         center = np.array(spec['center'], float)
