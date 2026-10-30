@@ -205,7 +205,7 @@ class ScenarioTests(unittest.TestCase):
         txt = lambda content: dict(type='text', plane=h.plane_to_json(top), name='Tekst', out=h.text_ids(group, 12),
                                    params=dict(text=content, anchor=[5, 8], size=14.0, font='Arial', bold=False, italic=False, angle=0.0))
         sc.op(txt('Radek'), 'Tekst')
-        letters = [b for b in sc.doc.bodies if b.kind == 'sketch']
+        letters = [b for b in sc.doc.bodies if b.kind == 'sketch' and h.text_group_of(b.id) == group]
         faces = h.material_regions(top, letters)
         srcs = [dict(kind='region', id=None, face=f, wire=f.outerWire(), plane=top, normal=(0, 0, 1), center=f.Center().toTuple()) for f in faces]
         specs = h.describe_profiles(srcs, sc.doc.bodies)
