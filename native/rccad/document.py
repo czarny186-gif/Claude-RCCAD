@@ -180,6 +180,19 @@ class Document:
         states[index] = (bodies, info)
         self._set_states(states, len(self._undo))
 
+    def clear_all(self):
+        """Czyści całą pracę łącznie z historią (bez możliwości cofnięcia): pusta oś czasu, bez więzów, zmiennych i wariantów. Ścieżka pliku zostaje."""
+        self.bodies = ()
+        self._undo, self._redo = [], []
+        self.info = {'label': 'Początek', 'icon': 'start'}
+        self.constraints, self.variables, self.snapshots = [], {}, {}
+        self.backup = None
+        self.pending_label = self.pending_icon = self.pending_op = None
+        self.keep_future, self.deferred = False, None
+        self._mesh_cache.clear()
+        self._revision = self._next_revision
+        self._next_revision += 1
+
     def snapshot(self, name):
         """Zapamiętuje całą historię pod nazwą (wariant); bryły są niezmienne, więc kopia nic nie kosztuje."""
         self.snapshots[name] = dict(states=self.states(), current=len(self._undo), constraints=list(self.constraints), variables=dict(self.variables))

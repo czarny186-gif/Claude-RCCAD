@@ -4162,14 +4162,20 @@ class StudioWindow(QMainWindow):
         if not self.document.bodies:
             self.toast('Pole robocze jest już puste.')
             return
-        answer = QMessageBox.question(self, 'Wyczyścić pole', 'Na pewno wyczyścić całe pole?\nWszystkie bryły i szkice zostaną usunięte (można cofnąć Ctrl+Z).',
+        answer = QMessageBox.question(self, 'Wyczyścić pole', 'Na pewno wyczyścić całe pole?\nWszystkie bryły, szkice i cała historia zostaną usunięte - tego nie można cofnąć.',
                                       QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if answer != QMessageBox.Yes:
             return
         self.set_mode(None)
-        self.document.commit(())
+        self.document.clear_all()
         self.selected = []
         self.edges = {}
+        self.override = {}
+        self._repick = None
+        self._hist_edit_close()
+        self.hist_vars.hide()
+        self._hist_sig = None
+        self.view.clear_body_matrices()
         self.refresh()
 
     def undo(self):

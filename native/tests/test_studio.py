@@ -396,7 +396,10 @@ class StudioTests(unittest.TestCase):
         self.assertEqual(w.document.bodies[-1].meta['sides'],6);self.assertEqual(len(w.document.bodies[-1].shape.Edges()),6)
         with patch.object(QMessageBox,'question',return_value=QMessageBox.Yes):w.clear_all()
         self.assertEqual(len(w.document.bodies),0)
-        w.undo();self.assertTrue(w.document.bodies)
+        labels,cur=w.document.timeline();self.assertEqual((len(labels),cur),(1,0))       # czyszczenie usuwa też historię
+        self.assertFalse(w.document.can_undo or w.document.can_redo or w.document.constraints or w.document.snapshots)
+        w.undo();w.redo();self.assertEqual(len(w.document.bodies),0)
+        self.sketch('rect',(0,0),(5,5));self.assertEqual(len(w.document.timeline()[0]),3)       # po wyczyszczeniu historia zaczyna się od nowa
 
     def test_shape_icons_and_menu_card(self):
         from rccad import shell_ui as ui
