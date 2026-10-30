@@ -373,6 +373,13 @@ class StudioWindow(QMainWindow):
         self.hist_revert.setToolTip('Cofnij ostatnią edycję kroku (przywraca poprzednią historię)')
         self.hist_revert.clicked.connect(self.history_revert)
         hl.addWidget(self.hist_revert)
+        self.hist_status = QLabel('')
+        self.hist_status.setStyleSheet('color:#187ac1; font-size:12px; font-weight:700; background:transparent;')
+        hl.addWidget(self.hist_status)
+        self._hist_job = None
+        self._hist_tick = QTimer(self)
+        self._hist_tick.setInterval(120)
+        self._hist_tick.timeout.connect(self._hist_progress)
         self.hist_compare = QPushButton('Porównaj')
         self.hist_compare.setObjectName('chip')
         self.hist_compare.setCheckable(True)
@@ -1668,15 +1675,20 @@ class StudioWindow(QMainWindow):
             raise kernel.CadError('Kliknij fragment szkicu.')
         body, pieces, index = target
 
+        recipe = dict(type='trim', id=body.id, mid=[float(c) for c in pieces[index].positionAt(.5).toTuple()], out=[])
+        existing = list(self.document.bodies)
+
         def build():
-            made = [Body(body.name, w, 'sketch', body.plane).prepared() for w in kernel.trim_result(pieces, index)]
-            out = []
-            for b in self.document.bodies:
-                out.extend(made if b.id == body.id else [b])
-            return out
+            return list(hist.run_trim(existing, recipe))
+
+        def apply(bodies):
+            old = {b.id for b in existing}
+            recipe['out'] = [b.id for b in bodies if b.id not in old]
+            self.document.pending_op = recipe
+            self.document.commit(bodies)
 
         self.view.set_preview_mesh(None)
-        self.run_operation('Nożyczki', build, lambda bodies: self.document.commit(bodies))
+        self.run_operation('Nożyczki', build, apply)
     # ---------- wymiary z klawiatury (panel jak #dimensionPanel, podgląd na żywo) ----------
     def open_dim_input(self, first=''):
         labels = DIM_LABELS.get(self.tool)
@@ -1825,6 +1837,7 @@ class StudioWindow(QMainWindow):
 
         def apply(body):
             self.override = {}
+            self.document.pending_op = dict(type='sketchmeta', id=body.id, meta=body.meta)
             self.document.commit([body if b.id == body.id else b for b in self.document.bodies])
             self._last_sketch_id = body.id
             self.selected = [body.id]
@@ -3205,7 +3218,7 @@ class StudioWindow(QMainWindow):
                 self.view.set_selection_meshes(None)
             return
         states, current, _ = self.document.backup
-        meshes = [b.mesh for b in states[current][0] if b.kind == 'solid' and b.visible and b.mesh is not None]
+        meshes = [b.mesh for b in self.document.meshed([x for x in states[current][0] if x.kind == 'solid' and x.visible]) if b.mesh is not None]
         self._compare_on = bool(meshes)
         self.view.set_selection_meshes(meshes or None, color=(.9, .2, .2, .22), line_color=(.8, .1, .1, 1))
 
@@ -3285,11 +3298,11 @@ class StudioWindow(QMainWindow):
         if chosen is edit:
             self.history_edit(index)
         elif chosen is off:
-            self.history_restructure(lambda st, c: hist.toggle_step(st, index, c))
+            self.history_restructure(lambda st, c, job: hist.toggle_step(st, index, c, job))
         elif chosen is left:
-            self.history_restructure(lambda st, c: hist.move_step(st, index - 1, c))
+            self.history_restructure(lambda st, c, job: hist.move_step(st, index - 1, c, job))
         elif chosen is right:
-            self.history_restructure(lambda st, c: hist.move_step(st, index, c))
+            self.history_restructure(lambda st, c, job: hist.move_step(st, index, c, job))
         elif chosen is note:
             from PySide6.QtWidgets import QInputDialog
             text, ok = QInputDialog.getText(self, 'Nazwa kroku', 'Podpis kroku (puste = domyślny):', text=states[index][1].get('note', ''))
@@ -3303,7 +3316,7 @@ class StudioWindow(QMainWindow):
                 self.document.set_info(index, group=text.strip()[:40])
                 self.refresh()
         elif chosen is delete:
-            self.history_restructure(lambda st, c: hist.delete_step(st, index, c))
+            self.history_restructure(lambda st, c, job: hist.delete_step(st, index, c, job))
 
     def history_restructure(self, change):
         """Wyłączenie / usunięcie / zmiana kolejności kroku: nowa oś czasu jest przeliczana w tle, poprzednią można przywrócić strzałką."""
@@ -3321,7 +3334,7 @@ class StudioWindow(QMainWindow):
                 self.toast(f'{failed} kroków nie dało się przeliczyć (oznaczone na czerwono) - popraw je albo cofnij zmianę.', 7000)
 
         constraints = list(self.document.constraints)
-        self.run_operation('Przeliczanie historii', lambda: change(states, constraints), apply)
+        self.run_history(lambda job: change(states, constraints, job), apply)
 
     def _replay_deferred(self):
         """Operacja wykonana po przeskoku w historii została wstawiona w środek: późniejsze kroki liczymy od nowa na jej wyniku (w tle)."""
@@ -3339,7 +3352,7 @@ class StudioWindow(QMainWindow):
             self.toast(f'Wstawiono krok w środek historii, {failed} kroków wymaga poprawy (czerwone).' if failed else 'Wstawiono krok w środek historii, następne kroki przeliczone.', 4500)
 
         constraints = list(self.document.constraints)
-        self.run_operation('Przeliczanie historii', lambda: hist.rebuild(current, steps, constraints), apply)
+        self.run_history(lambda job: hist.rebuild(current, steps, constraints, job), apply)
 
     def history_revert(self):
         if self.busy or not self.document.backup:
@@ -3370,30 +3383,39 @@ class StudioWindow(QMainWindow):
         if recipe and recipe.get('type') in hist.RUNNERS:
             fields = dict(kind='recipe', collect=self._recipe_form(recipe, lay))
         else:
-            added = [b for b in bodies if b.kind == 'sketch' and b.meta and b.meta.get('tool') in sm.EDITABLE and b.id not in {x.id for x in states[index - 1][0]}]
-            if not added:
-                self.toast('Ten krok nie ma parametrów do edycji (edytować można wymiary szkicu oraz wyciągnięcie i wycięcie).')
+            known = {x.id for x in states[index - 1][0]}
+            new_bodies = [b for b in bodies if b.id not in known]
+            if not new_bodies:
+                self.toast('Ten krok nie dodaje obiektów ani nie ma przepisu - nie ma czego edytować.')
                 return
-            target = added[0]
-            labels = sm.LABELS.get(target.meta['tool'], ())
-            edits, links = [], []
-            drivers = [(b, i, f'{b.name}: {cap}') for b in bodies if b.kind == 'sketch' and b.id != target.id and b.meta and b.meta.get('tool') in sm.EDITABLE
-                       for i, cap in enumerate(sm.LABELS.get(b.meta['tool'], ()))]
-            for n, (caption, value) in enumerate(zip(labels, sm.values(target.meta))):
-                box = QLineEdit(value)
+            added = [b for b in new_bodies if b.kind == 'sketch' and b.meta and b.meta.get('tool') in sm.EDITABLE]
+            edits, links, target = [], [], (added[0] if added else None)
+            if target is not None:
+                labels = sm.LABELS.get(target.meta['tool'], ())
+                drivers = [(b, i, f'{b.name}: {cap}') for b in bodies if b.kind == 'sketch' and b.id != target.id and b.meta and b.meta.get('tool') in sm.EDITABLE
+                           for i, cap in enumerate(sm.LABELS.get(b.meta['tool'], ()))]
+                for n, (caption, value) in enumerate(zip(labels, sm.values(target.meta))):
+                    box = QLineEdit(value)
+                    lay.addWidget(_label(caption, 'psub'))
+                    lay.addWidget(box)
+                    edits.append(box)
+                    link = QComboBox()       # więz: ten wymiar zawsze równy wymiarowi innego szkicu
+                    link.addItem('Wymiar niezależny', None)
+                    current = next((c for c in self.document.constraints if c['b'] == target.id and c['bi'] == n), None)
+                    for b, i, text in drivers:
+                        link.addItem('= ' + text, (b.id, i))
+                        if current and current['a'] == b.id and current['ai'] == i:
+                            link.setCurrentIndex(link.count() - 1)
+                    lay.addWidget(link)
+                    links.append(link)
+            lay.addWidget(_label('Położenie dodanych obiektów: przesunięcie (mm) i obrót (°) względem stanu z tego kroku', 'psub'))
+            place = []
+            for caption in ('Przesuń X', 'Przesuń Y', 'Przesuń Z', 'Obrót wokół X', 'Obrót wokół Y', 'Obrót wokół Z'):
+                spin = _spin(0.0, -1e6, 1e6, 3, 1)
                 lay.addWidget(_label(caption, 'psub'))
-                lay.addWidget(box)
-                edits.append(box)
-                link = QComboBox()       # więz: ten wymiar zawsze równy wymiarowi innego szkicu
-                link.addItem('Wymiar niezależny', None)
-                current = next((c for c in self.document.constraints if c['b'] == target.id and c['bi'] == n), None)
-                for b, i, text in drivers:
-                    link.addItem('= ' + text, (b.id, i))
-                    if current and current['a'] == b.id and current['ai'] == i:
-                        link.setCurrentIndex(link.count() - 1)
-                lay.addWidget(link)
-                links.append(link)
-            fields = dict(kind='sketch', target=target, edits=edits, links=links)
+                lay.addWidget(spin)
+                place.append(spin)
+            fields = dict(kind='sketch', target=target, edits=edits, links=links, place=place, added=[b.id for b in new_bodies])
         self._hist_fields = fields
         row = QHBoxLayout()
         for text, cb in (('Zastosuj', lambda: self._history_edit_apply(index, fields)), ('Anuluj', self.hist_edit.hide)):
@@ -3444,6 +3466,12 @@ class StudioWindow(QMainWindow):
             self._hist_text = dict(text=text, size=size)
             return lambda: dict(recipe, params=dict(q, text=text.text(), font=font.currentFont().family(), size=size.value(), angle=angle.value(),
                                                     bold=bold.isChecked(), italic=italic.isChecked()))
+        if kind == 'sketchmeta':
+            meta = recipe['meta']
+            boxes = []
+            for caption, value in zip(sm.LABELS.get(meta['tool'], ()), sm.values(meta)):
+                boxes.append(field(caption, QLineEdit(value)))
+            return lambda: dict(recipe, meta=sm.apply_values(meta, [float(b.text().replace(',', '.')) for b in boxes]))
         if kind == 'transform':
             spins = [_spin(float(c), -1e6, 1e6, 3, 1) for c in recipe['v']]
             for caption, spin in zip(('X' if recipe['mode'] == 'move' else 'Obrót wokół X (°)', 'Y' if recipe['mode'] == 'move' else 'Obrót wokół Y (°)',
@@ -3522,30 +3550,33 @@ class StudioWindow(QMainWindow):
                 def first():
                     return hist.run_recipe(states[index - 1][0], recipe)
             else:
-                target = fields['target']
-                values = []
-                for box in fields['edits']:
-                    values.append(float(box.text().replace(',', '.')))
-                meta = sm.apply_values(target.meta, values)
-                shape = self._meta_shape(target.plane, meta)
-                new_info = info
-                constraints = [c for c in constraints if c['b'] != target.id]
-                for n, link in enumerate(fields['links']):
-                    if link.currentData():
-                        constraints.append(dict(a=link.currentData()[0], ai=link.currentData()[1], b=target.id, bi=n, k=1.0))
+                target, new_info = fields['target'], info
+                shift = [x.value() for x in fields['place']]
+                meta = shape = None
+                if target is not None:
+                    values = [float(box.text().replace(',', '.')) for box in fields['edits']]
+                    meta = sm.apply_values(target.meta, values)
+                    shape = self._meta_shape(target.plane, meta)
+                    constraints = [c for c in constraints if c['b'] != target.id]
+                    for n, link in enumerate(fields['links']):
+                        if link.currentData():
+                            constraints.append(dict(a=link.currentData()[0], ai=link.currentData()[1], b=target.id, bi=n, k=1.0))
 
                 def first():
-                    return tuple(replace(b, shape=shape, mesh=kernel.display_mesh(shape), meta=meta) if b.id == target.id else b for b in bodies)
+                    result = tuple(replace(b, shape=shape, mesh=kernel.display_mesh(shape), meta=meta) if (target is not None and b.id == target.id) else b for b in bodies)
+                    if any(abs(x) > 1e-12 for x in shift):
+                        result = hist.place_bodies(result, fields['added'], shift[:3], shift[3:])
+                    return result
         except (ValueError, kernel.CadError) as exc:
             self.toast(str(exc) or 'Wpisz poprawne liczby.')
             return
         self.hist_edit.hide()
 
-        def build():
+        def build(job):
             edited = first()
             patched = list(states)
             patched[index] = (bodies, new_info)
-            return hist.recompute(patched, index, edited, constraints)
+            return hist.recompute(patched, index, edited, constraints, job)
 
         def apply(result):
             new_states, failed = result
@@ -3554,7 +3585,30 @@ class StudioWindow(QMainWindow):
             if failed:
                 self.toast(f'{failed} kroków nie dało się przeliczyć (oznaczone na czerwono) - popraw je albo cofnij edycję.', 7000)
 
-        self.run_operation('Przeliczanie historii', build, apply)
+        self.run_history(build, apply)
+
+    def run_history(self, build, apply):
+        """Przeliczanie historii w tle z paskiem postępu; Esc przerywa (model zostaje bez zmian)."""
+        job = {'cancel': False, 'i': 0, 'n': 0}
+        self._hist_job = job
+
+        def done(value):
+            self._hist_job = None
+            self.hist_status.setText('')
+            apply(value)
+
+        self._hist_tick.start()
+        self.toast('Przeliczanie historii… (Esc przerywa)', 2500)
+        self.run_operation('Przeliczanie historii', lambda: build(job), done)
+
+    def _hist_progress(self):
+        job = self._hist_job
+        if job is None or not self.busy:
+            self._hist_tick.stop()
+            self._hist_job = None
+            self.hist_status.setText('')
+            return
+        self.hist_status.setText(f"Przeliczanie {job['i'] + 1}/{job['n']} · Esc przerywa" if job['n'] else 'Przeliczanie…')
 
     def history_goto(self, index):
         if self.busy:
@@ -3672,6 +3726,7 @@ class StudioWindow(QMainWindow):
 
     def delete_selected(self):
         if not self.busy and self.selected and self.mode is None:
+            self.document.pending_op = dict(type='delete', ids=list(self.selected))
             self.document.commit([b for b in self.document.bodies if b.id not in self.selected])
             self.selected = []
             self.refresh()
@@ -3842,6 +3897,11 @@ class StudioWindow(QMainWindow):
     def keyPressEvent(self, event):
         key = event.key()
         if self.busy:
+            if key == Qt.Key_Escape and self._hist_job is not None:
+                self._hist_job['cancel'] = True
+                self.toast('Przerywam przeliczanie historii…', 2000)
+                event.accept()
+                return
             super().keyPressEvent(event)
             return
         if self.mode == 'sketch':

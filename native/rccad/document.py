@@ -45,6 +45,7 @@ class Document:
         self.pending_label = None
         self.pending_icon = None
         self.pending_op = None
+        self._mesh_cache = {}      # id(kształt) -> (kształt, siatka): siatki wyświetlania liczone leniwie, tylko dla bieżącego stanu
         self.keep_future = False   # po przeskoku w historii nowa operacja wstawia się w środek, a późniejsze kroki są przeliczane
         self.deferred = None       # (stan sprzed wstawienia, późniejsze kroki) do przeliczenia w tle
 
@@ -103,6 +104,22 @@ class Document:
         self._revision = self._next_revision
         self._next_revision += 1
 
+    def meshed(self, bodies):
+        """Bryły z uzupełnionymi siatkami (stany historii wczytane z pliku nie mają siatek, dopóki nie zostaną pokazane)."""
+        if all(b.mesh is not None for b in bodies):
+            return tuple(bodies)
+        out = []
+        for b in bodies:
+            if b.mesh is None:
+                hit = self._mesh_cache.get(id(b.shape))
+                if hit is None or hit[0] is not b.shape:
+                    if len(self._mesh_cache) > 600:
+                        self._mesh_cache.clear()
+                    hit = self._mesh_cache[id(b.shape)] = (b.shape, display_mesh(b.shape))
+                b = replace(b, mesh=hit[1])
+            out.append(b)
+        return tuple(out)
+
     def append_states(self, tail):
         """Dokleja przeliczone późniejsze kroki za bieżący i ustawia widok na ostatnim."""
         states = self.states() + list(tail)
@@ -113,12 +130,14 @@ class Document:
         if self._undo:
             self._redo.append((self.bodies, self._revision, self.info))
             self.bodies, self._revision, self.info = self._undo.pop()
+            self.bodies = self.meshed(self.bodies)
 
     def redo(self):
         self.keep_future = False
         if self._redo:
             self._undo.append((self.bodies, self._revision, self.info))
             self.bodies, self._revision, self.info = self._redo.pop()
+            self.bodies = self.meshed(self.bodies)
 
     # ---------- historia: oś czasu stanów (niezmienne bryły, więc przeskok jest natychmiastowy) ----------
     def timeline(self):
@@ -165,6 +184,7 @@ class Document:
         self._next_revision += len(states)
         self._undo = [(b, revisions[i], inf) for i, (b, inf) in enumerate(states[:current])]
         self.bodies, self.info = states[current]
+        self.bodies = self.meshed(self.bodies)
         self._redo = [(b, revisions[i], inf) for i, (b, inf) in reversed(list(enumerate(states))[current + 1:])]
         self._revision = revisions[current]
         self.keep_future, self.deferred = False, None
@@ -280,7 +300,7 @@ class Document:
                         source.write_bytes(archive.read(files[number]))
                         shape = cq.importers.importBrep(str(source)).val()
                         valid(shape, kind == 'solid')
-                        cache[number] = (shape, display_mesh(shape))
+                        cache[number] = (shape, None)
                     return cache[number]
 
                 built = []
@@ -312,6 +332,7 @@ class Document:
                 result._next_revision = len(built) + 1
                 result._undo = [(b, revisions[i], inf) for i, (b, inf) in enumerate(built[:current])]
                 result.bodies, result.info = built[current]
+                result.bodies = result.meshed(result.bodies)
                 result._revision = result._saved_revision = revisions[current]
                 result._redo = [(b, revisions[i], inf) for i, (b, inf) in reversed(list(enumerate(built))[current + 1:])]
                 result.path = Path(path)

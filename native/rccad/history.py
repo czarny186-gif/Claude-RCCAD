@@ -380,7 +380,62 @@ def run_text(bodies, recipe):
     return [*bodies, *[Body(recipe['name'], sh, 'sketch', plane, id=ids[i]).prepared() for i, sh in enumerate(shapes)]]
 
 
-RUNNERS = {'text': run_text, 'extrude': run_extrude, 'pattern': run_pattern, 'mod': run_mod, 'transform': run_transform, 'mirror': run_mirror, 'bool': run_bool}
+def run_delete(bodies, recipe):
+    gone = set(recipe['ids'])
+    return [b for b in bodies if b.id not in gone]
+
+
+def run_sketchmeta(bodies, recipe):
+    body = _body(bodies, recipe['id'])
+    meta = recipe['meta']
+    shape = meta_shape(body.plane, meta)
+    return _replace(bodies, replace(body, shape=shape, mesh=kernel.display_mesh(shape), meta=meta))
+
+
+def run_trim(bodies, recipe):
+    """Nożyczki: usuwa kawałek szkicu (między przecięciami z innymi szkicami) najbliższy zapisanemu punktowi."""
+    body = _body(bodies, recipe['id'])
+    plane = kernel.actual_frame(body.shape, body.plane)
+    group = sketch_groups(bodies).get(plane_key(plane))
+    if group is None or body not in group[1]:
+        raise kernel.CadError('Szkic nie jest już widoczny w tej płaszczyźnie.')
+    members = group[1]
+    pieces = kernel.trim_pieces([b.shape.Edges() for b in members], members.index(body))
+    if not pieces:
+        raise kernel.CadError('Brak kawałków do przycięcia.')
+    mid = np.array(recipe['mid'], float)
+    index = min(range(len(pieces)), key=lambda i: float(np.linalg.norm(np.array(pieces[i].positionAt(.5).toTuple()) - mid)))
+    ids = list(recipe.get('out', ()))
+    wires = kernel.trim_result(pieces, index)
+    ids += [uuid.uuid4().hex for _ in range(len(wires) - len(ids))]
+    made = [Body(body.name, w, 'sketch', body.plane, id=ids[i]).prepared() for i, w in enumerate(wires)]
+    out = []
+    for b in bodies:
+        out.extend(made if b.id == body.id else [b])
+    return out
+
+
+def place_bodies(bodies, ids, move=(0, 0, 0), rotate=(0, 0, 0)):
+    """Przesuwa i obraca (wokół wspólnego środka) wskazane obiekty: edycja położenia obiektów dodanych w kroku bez przepisu."""
+    ids = set(ids)
+    group = [b for b in bodies if b.id in ids]
+    if not group:
+        return tuple(bodies)
+    center = np.mean([b.shape.Center().toTuple() for b in group], axis=0)
+    out = []
+    for b in bodies:
+        if b.id not in ids:
+            out.append(b)
+            continue
+        shape = b.shape
+        for axis, angle in zip(((1, 0, 0), (0, 1, 0), (0, 0, 1)), rotate):
+            if angle:
+                shape = shape.rotate(tuple(float(c) for c in center), tuple(float(center[i] + axis[i]) for i in range(3)), float(angle))
+        out.append(replace(b.changed(shape.translate(tuple(float(c) for c in move))), meta=None))
+    return tuple(out)
+
+
+RUNNERS = {'delete': run_delete, 'sketchmeta': run_sketchmeta, 'trim': run_trim, 'text': run_text, 'extrude': run_extrude, 'pattern': run_pattern, 'mod': run_mod, 'transform': run_transform, 'mirror': run_mirror, 'bool': run_bool}
 
 
 def run_recipe(bodies, recipe):
@@ -455,22 +510,70 @@ def apply_constraints(bodies, constraints):
     return tuple(bodies)
 
 
-def rebuild(base, steps, constraints=()):
-    """Wykonuje kolejno kroki na stanie `base`. steps: lista (stan_przed_oryginalny, stan_po_oryginalny, info) - dwa pierwsze służą
-    krokom bez przepisu (przenoszenie różnicy). Krok wyłączony ('off') niczego nie zmienia; nieprzeliczalny dostaje 'stale'.
-    Zwraca (lista (bryły, info), liczba nieprzeliczonych)."""
+def changed_ids(before, current):
+    """Identyfikatory obiektów, które różnią się między dwoma stanami (inny kształt, widoczność, nazwa albo brak po jednej stronie)."""
+    bm, cm = {b.id: b for b in before}, {b.id: b for b in current}
+    return {i for i in bm.keys() | cm.keys()
+            if i not in bm or i not in cm or bm[i].shape is not cm[i].shape or bm[i].visible != cm[i].visible or bm[i].name != cm[i].name}
+
+
+def reads(recipe, current):
+    """Zbiór obiektów, od których zależy wynik kroku (None = nie wiadomo, trzeba liczyć od nowa)."""
+    kind = recipe['type']
+    sketches = {b.id for b in current if b.kind == 'sketch'}
+    if kind == 'extrude':
+        ids = set(recipe.get('spent', ()))
+        for spec in recipe['profiles']:
+            if spec['k'] == 'region':
+                ids |= sketches
+            else:
+                ids.add(spec['id'])
+        return ids
+    if kind in ('mod', 'transform', 'mirror', 'pattern', 'sketchmeta'):
+        return {recipe['id']}
+    if kind == 'bool':
+        return {recipe['base'], *recipe['tools']}
+    if kind == 'delete':
+        return set(recipe['ids'])
+    if kind == 'trim':
+        return {recipe['id']} | sketches
+    if kind == 'text':
+        return set()
+    return None
+
+
+def rebuild(base, steps, constraints=(), job=None):
+    """Wykonuje kolejno kroki na stanie `base`. steps: lista (stan_przed_oryginalny, stan_po_oryginalny, info[, info_oryginalny]).
+    Szybkie ścieżki: stan wejściowy nie zmienił się względem oryginału -> wynik oryginalny; krok niezależny od zmienionych obiektów ->
+    przeniesienie różnicy bez ponownych obliczeń. Krok wyłączony ('off') niczego nie zmienia; nieprzeliczalny dostaje 'stale'.
+    job: słownik {'cancel', 'i', 'n'} do przerywania i paska postępu. Zwraca (lista (bryły, info), liczba nieprzeliczonych)."""
     out, failed, current = [], 0, tuple(base)
-    for before, after, info in steps:
+    for n, step in enumerate(steps):
+        before, after, info = step[:3]
+        original = step[3] if len(step) > 3 else info
+        if job is not None:
+            if job.get('cancel'):
+                raise kernel.CadError('Przeliczanie przerwane.')
+            job['i'], job['n'] = n, len(steps)
         info = {key: v for key, v in info.items() if key != 'stale'}
+        original = {key: v for key, v in original.items() if key != 'stale'}
         recipe = info.get('op')
         result = None
-        if info.get('off'):
+        diff = changed_ids(before, current)
+        if info == original and not diff:
+            result = tuple(after)
+        elif info.get('off'):
             result = current
         elif recipe and recipe.get('type') in RUNNERS:
-            try:
-                result = run_recipe(current, recipe)
-            except Exception:
-                result = None
+            dependencies = reads(recipe, current) if info == original else None
+            if dependencies is not None and not (dependencies & diff):
+                merged, ok = diff_apply(before, after, current)
+                result = tuple(merged) if ok else None
+            if result is None:
+                try:
+                    result = run_recipe(current, recipe)
+                except Exception:
+                    result = None
         else:
             merged, ok = diff_apply(before, after, current)
             result = tuple(merged) if ok else None
@@ -488,35 +591,35 @@ def _steps(states, indices):
     return [(states[j - 1][0], states[j][0], states[j][1]) for j in indices]
 
 
-def recompute(states, k, edited_bodies, constraints=()):
+def recompute(states, k, edited_bodies, constraints=(), job=None):
     """Po edycji kroku k (jego nowy wynik: edited_bodies) przelicza kolejne kroki. Zwraca (nowe stany, liczba nieprzeliczonych kroków)."""
     edited_bodies = apply_constraints(edited_bodies, constraints)
     head = list(states[:k]) + [(tuple(edited_bodies), {key: v for key, v in states[k][1].items() if key != 'stale'})]
-    tail, failed = rebuild(edited_bodies, _steps(states, range(k + 1, len(states))), constraints)
+    tail, failed = rebuild(edited_bodies, _steps(states, range(k + 1, len(states))), constraints, job)
     return head + tail, failed
 
 
-def toggle_step(states, j, constraints=()):
+def toggle_step(states, j, constraints=(), job=None):
     """Wyłącza / włącza krok j (stan go pomija) i przelicza resztę."""
     info = dict(states[j][1])
     if info.get('off'):
         info.pop('off')
     else:
         info['off'] = True
-    steps = [(states[j - 1][0], states[j][0], info), *_steps(states, range(j + 1, len(states)))]
-    tail, failed = rebuild(states[j - 1][0], steps, constraints)
+    steps = [(states[j - 1][0], states[j][0], info, states[j][1]), *_steps(states, range(j + 1, len(states)))]
+    tail, failed = rebuild(states[j - 1][0], steps, constraints, job)
     return list(states[:j]) + tail, failed
 
 
-def delete_step(states, j, constraints=()):
+def delete_step(states, j, constraints=(), job=None):
     """Usuwa krok j z osi czasu i przelicza następne."""
-    tail, failed = rebuild(states[j - 1][0], _steps(states, range(j + 1, len(states))), constraints)
+    tail, failed = rebuild(states[j - 1][0], _steps(states, range(j + 1, len(states))), constraints, job)
     return list(states[:j]) + tail, failed
 
 
-def move_step(states, j, constraints=()):
+def move_step(states, j, constraints=(), job=None):
     """Zamienia miejscami kroki j i j+1 (krok j przesuwa się później) i przelicza od j."""
     steps = [(states[j][0], states[j + 1][0], states[j + 1][1]), (states[j - 1][0], states[j][0], states[j][1]),
              *_steps(states, range(j + 2, len(states)))]
-    tail, failed = rebuild(states[j - 1][0], steps, constraints)
+    tail, failed = rebuild(states[j - 1][0], steps, constraints, job)
     return list(states[:j]) + tail, failed

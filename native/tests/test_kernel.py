@@ -225,6 +225,30 @@ class DocumentTests(unittest.TestCase):
             path=Path(directory)/'c.rccadx';d.save(path);o=Document.load(path)
             self.assertEqual(o.constraints,cons);infos=o.infos()[0];self.assertEqual((infos[1]['note'],infos[1]['group']),('Pierwszy','Szkice'))
 
+    def test_trim_delete_sketchmeta_placement_and_fast_paths(self):
+        from dataclasses import replace as rep
+        from rccad import history as h
+        mk=lambda name,tool,pts:Body(name,k.sketch_shape(tool,'XY',pts,5),'sketch','XY',meta=dict(tool=tool,points=[list(p) for p in pts],sides=5)).prepared()
+        a=mk('A','rect',[(0,0),(20,10)]);c=mk('C','circle',[(0,0),(3,0)]);c=rep(c,id='d'*32)
+        r_meta=dict(type='sketchmeta',id=a.id,meta=dict(tool='rect',points=[[0,0],[40,10]],sides=5))
+        out=h.run_recipe((a,),r_meta);self.assertAlmostEqual(k.bounds(out[0].shape).xlen,40,3)
+        gone=h.run_recipe((a,c),dict(type='delete',ids=[c.id]));self.assertEqual([b.id for b in gone],[a.id])
+        placed=h.place_bodies((a,c),[c.id],(5,0,0),(0,0,0));self.assertAlmostEqual(k.bounds(placed[1].shape).xmin,2,3)
+        self.assertAlmostEqual(k.bounds(placed[0].shape).xmin,0,3)                    # nietknięty obiekt zostaje
+        steps0=[((),(a,)),((a,),(a,c)),((a,c),(a,c))]
+        states=[((),{'label':'P','icon':'start'}),((a,),{'label':'A','icon':'sketch'}),((a,c),{'label':'C','icon':'sketch'}),(gone,{'label':'Del','icon':'trash','op':dict(type='delete',ids=[c.id])})]
+        job={'cancel':False,'i':0,'n':0}
+        out,failed=h.recompute(states,1,(a,),(),job);self.assertEqual(failed,0);self.assertEqual(job['n'],2)
+        self.assertIs(out[1][0][0],a)                                        # nic się nie zmieniło: wynik z cache (te same obiekty)
+        job={'cancel':True};
+        with self.assertRaises(k.CadError):h.recompute(states,1,(a,),(),job)
+        wide=rep(a,shape=k.box(5,5,5))
+        out,failed=h.recompute(states,1,(wide,),());self.assertEqual(failed,0);self.assertEqual([b.id for b in out[-1][0]],[a.id])     # usunięcie przeniesione bez przeliczania
+        d=Document();d.commit([a,c],'AC');d.commit([a],'Del')
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'lazy.rccadx';d.save(path);d.undo();o=Document.load(path)
+            self.assertTrue(all(b.mesh is not None for b in o.bodies));o.undo();self.assertTrue(all(b.mesh is not None for b in o.bodies))    # siatki liczone leniwie przy przeskoku
+
     def test_corrupted_project(self):
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'bad.rccadx';path.write_bytes(b'not a zip')
