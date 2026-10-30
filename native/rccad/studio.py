@@ -400,6 +400,7 @@ class StudioWindow(QMainWindow):
         self.hist_status.setStyleSheet('color:#187ac1; font-size:12px; font-weight:700; background:transparent;')
         hl.addWidget(self.hist_status)
         self._hist_job = None
+        self._hist_folded = set()
         self._hist_tick = QTimer(self)
         self._hist_tick.setInterval(120)
         self._hist_tick.timeout.connect(self._hist_progress)
@@ -408,6 +409,15 @@ class StudioWindow(QMainWindow):
         self.hist_varbtn.setToolTip('Zmienne projektu i wyrażenia w polach kroków (np. szerokość / 2)')
         self.hist_varbtn.clicked.connect(self.history_variables)
         hl.addWidget(self.hist_varbtn)
+        self.hist_menu_button = QPushButton('Warianty')
+        self.hist_menu_button.setObjectName('chip')
+        self.hist_menu_button.setToolTip('Warianty historii zapisane w projekcie, eksport listy kroków, autozapis')
+        self.hist_menu_button.clicked.connect(self.history_menu)
+        hl.addWidget(self.hist_menu_button)
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setInterval(150000)
+        self._autosave_timer.timeout.connect(self._autosave)
+        self._autosave_timer.start()
         self.hist_compare = QPushButton('Porównaj')
         self.hist_compare.setObjectName('chip')
         self.hist_compare.setCheckable(True)
@@ -3282,7 +3292,7 @@ class StudioWindow(QMainWindow):
         if not self.hist_bar.isVisible():
             return
         infos, current = self.document.infos()
-        sig = (tuple((i.get('label'), i.get('icon'), bool(i.get('stale')), bool(i.get('off')), i.get('note'), i.get('group'), i.get('why')) for i in infos), current, bool(self.document.backup))
+        sig = (tuple((i.get('label'), i.get('icon'), bool(i.get('stale')), bool(i.get('off')), i.get('note'), i.get('group'), i.get('why')) for i in infos), current, bool(self.document.backup), tuple(sorted(self._hist_folded)))
         self.hist_revert.setEnabled(bool(self.document.backup))
         if sig == self._hist_sig:
             return
@@ -3302,10 +3312,19 @@ class StudioWindow(QMainWindow):
             chip.setChecked(i == current)
             editable = bool(info.get('op')) or info.get('icon') == 'sketch'
             group = info.get('group')
+            folded = bool(group) and group in self._hist_folded and not (infos[current].get('group') == group)
             if group and (i == 0 or infos[i - 1].get('group') != group):
-                tag = QLabel(group)
-                tag.setStyleSheet('color:#187ac1; font-size:11px; font-weight:700; background:transparent;')
+                size = sum(1 for x in infos[i:] if x.get('group') == group)
+                tag = QPushButton(('▸ ' if folded else '▾ ') + group + (f' ({size})' if folded else ''))
+                tag.setFlat(True)
+                tag.setCursor(Qt.PointingHandCursor)
+                tag.setToolTip('Kliknij, aby zwinąć / rozwinąć grupę kroków')
+                tag.setStyleSheet('color:#187ac1; font-size:11px; font-weight:700; background:transparent; border:none; padding:0 4px;')
+                tag.clicked.connect(lambda _=False, g=group: self._hist_fold(g))
                 self.hist_row.addWidget(tag)
+            if folded:
+                chip.deleteLater()
+                continue
             chip.setToolTip(f"{i}. {info.get('note') or info.get('label', '')}" + (f"\n({info['label']})" if info.get('note') else '') + (f"\nGrupa: {group}" if group else '') + (('\nBŁĄD: ' + info.get('why', 'nie dało się przeliczyć tego kroku')) if info.get('stale') else '')
                             + ('\nDwuklik: edytuj parametry' if editable else ''))
             style = []
@@ -3409,6 +3428,114 @@ class StudioWindow(QMainWindow):
 
         constraints = self._hist_ctx()
         self.run_history(lambda job: hist.rebuild(current, steps, constraints, job), apply)
+
+    def _hist_fold(self, group):
+        self._hist_folded ^= {group}
+        self._hist_sig = None
+        self._hist_update()
+
+    def history_step(self, delta, absolute=False):
+        """Skróty: Alt+←/→ krok wstecz / naprzód, Alt+Home / Alt+End początek / koniec historii."""
+        if self.busy:
+            return
+        count, current = len(self.document.infos()[0]), self.document.infos()[1]
+        self.history_goto(max(0, min(count - 1, delta if absolute else current + delta)))
+
+    def history_menu(self):
+        from PySide6.QtWidgets import QInputDialog, QMenu
+        if self.busy:
+            return
+        menu = QMenu(self)
+        save = menu.addAction('Zapisz bieżącą historię jako wariant…')
+        names = list(self.document.snapshots)
+        loaders, removers = {}, {}
+        if names:
+            menu.addSeparator()
+        for name in names:
+            sub = menu.addMenu('Wariant: ' + name)
+            loaders[sub.addAction('Wczytaj (można cofnąć strzałką)')] = name
+            removers[sub.addAction('Usuń wariant')] = name
+        menu.addSeparator()
+        export = menu.addAction('Eksportuj listę kroków do pliku tekstowego…')
+        auto = self._autosave_path()
+        recover = menu.addAction('Otwórz autozapis') if auto.exists() else None
+        chosen = menu.exec(self.hist_menu_button.mapToGlobal(self.hist_menu_button.rect().topLeft()))
+        if chosen is None:
+            return
+        if chosen is save:
+            text, ok = QInputDialog.getText(self, 'Wariant', 'Nazwa wariantu:', text=f'Wariant {len(names) + 1}')
+            if ok and text.strip():
+                self.document.snapshot(text.strip()[:60])
+                self.toast('Wariant zapisany w projekcie (pamiętaj o zapisie pliku).', 3500)
+                self.refresh()
+        elif chosen in loaders:
+            self.set_mode(None) if self.mode is not None else None
+            self.document.restore_snapshot(loaders[chosen])
+            self.selected, self.edges = [], {}
+            self.refresh()
+        elif chosen in removers:
+            self.document.delete_snapshot(removers[chosen])
+            self.refresh()
+        elif chosen is export:
+            self.history_export_text()
+        elif recover is not None and chosen is recover:
+            def loaded(doc):
+                self.document = doc
+                self.selected = []
+            self.run_operation('Otwieranie autozapisu', lambda: Document.load(auto), loaded, True)
+
+    def history_export_text(self):
+        path, _ = QFileDialog.getSaveFileName(self, 'Eksportuj listę kroków', 'Historia.txt', 'Tekst (*.txt)')
+        if not path:
+            return
+        infos, current = self.document.infos()
+        lines = [f"Historia projektu{' - ' + self.document.path.stem if self.document.path else ''}", '']
+        for i, info in enumerate(infos):
+            line = f"{i:3d}. {info.get('note') or info.get('label', '')}"
+            if info.get('note'):
+                line += f" ({info.get('label', '')})"
+            if info.get('group'):
+                line += f" [{info['group']}]"
+            if info.get('off'):
+                line += ' (wyłączony)'
+            if info.get('stale'):
+                line += ' BŁĄD: ' + info.get('why', 'nie dało się przeliczyć')
+            lines.append(line + ('   <- bieżący' if i == current else ''))
+        if self.document.variables:
+            lines += ['', 'Zmienne:', *[f'  {k} = {v}' for k, v in self.document.variables.items()]]
+        try:
+            Path(path).write_text('\n'.join(lines) + '\n', encoding='utf-8')
+            self.toast('Lista kroków zapisana.', 2500)
+        except OSError as exc:
+            self.toast(f'Nie można zapisać pliku: {exc}')
+
+    @staticmethod
+    def _autosave_path_for(document):
+        if document.path is not None:
+            return document.path.with_name(document.path.stem + '.autosave.rccadx')
+        return Path.home() / '.rccad' / 'autozapis.rccadx'
+
+    def _autosave_path(self):
+        return self._autosave_path_for(self.document)
+
+    def _autosave(self):
+        """Co kilka minut zapisuje kopię projektu obok pliku (albo w ~/.rccad) w tle; nie zmienia stanu „zapisany”."""
+        if self.busy or self.mode is not None or not self.document.dirty or not self.document.can_undo and not self.document.can_redo:
+            return
+        document, path = self.document, self._autosave_path()
+        revision = document._revision
+        if getattr(self, '_autosaved', None) == (id(document), revision):
+            return
+
+        def work():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            document.save(path, mark=False)
+            return revision
+
+        work_item = _Work(work)
+        work_item.signals.done.connect(lambda value, d=id(document): setattr(self, '_autosaved', (d, value)))
+        work_item.signals.failed.connect(lambda message: None)
+        self.pool.start(work_item)
 
     def history_revert(self):
         if self.busy or not self.document.backup:
@@ -4115,7 +4242,7 @@ class StudioWindow(QMainWindow):
             path = Path(value)
             if path.suffix.lower() != '.rccadx':
                 path = path.with_suffix('.rccadx')
-        self.run_operation('Zapisywanie projektu', lambda: self.document.save(path), lambda _: self.toast('Projekt zapisany.', 2500))
+        self.run_operation('Zapisywanie projektu', lambda: self.document.save(path), lambda _: (self._autosave_path_for(self.document).unlink(missing_ok=True), self.toast('Projekt zapisany.', 2500)))
 
     def import_model(self):
         path, _ = QFileDialog.getOpenFileName(self, 'Importuj', '', 'Modele CAD i SVG (*.step *.stp *.brep *.brp *.stl *.dxf *.svg)')
@@ -4157,6 +4284,11 @@ class StudioWindow(QMainWindow):
     # =====================================================================
     def keyPressEvent(self, event):
         key = event.key()
+        if event.modifiers() & Qt.AltModifier and not self.busy and key in (Qt.Key_Left, Qt.Key_Right, Qt.Key_Home, Qt.Key_End):
+            {Qt.Key_Left: lambda: self.history_step(-1), Qt.Key_Right: lambda: self.history_step(1),
+             Qt.Key_Home: lambda: self.history_step(0, True), Qt.Key_End: lambda: self.history_step(10 ** 6, True)}[key]()
+            event.accept()
+            return
         if key == Qt.Key_Escape and self._repick is not None and not self.busy:
             self._repick = None
             self.history_goto(len(self.document.infos()[0]) - 1)

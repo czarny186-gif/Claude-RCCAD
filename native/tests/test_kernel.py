@@ -275,6 +275,21 @@ class DocumentTests(unittest.TestCase):
             path=Path(directory)/'vars.rccadx';d.save(path);o=Document.load(path)
             self.assertEqual(o.variables,{'h':'20'});self.assertEqual(o.states()[-1][1]['op']['d1'],{'expr':'h'})
 
+    def test_snapshots_persist_share_geometry_and_autosave_does_not_mark_saved(self):
+        a=Body('A',k.box(10,10,10)).prepared();b=Body('B',k.box(5,5,5)).prepared()
+        d=Document();d.commit([a],'A');d.snapshot('v1');d.commit([a,b],'B')
+        self.assertEqual(len(d.states()),3)
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'v.rccadx';d.save(path);self.assertFalse(d.dirty)
+            d.commit([a],'C');auto=Path(directory)/'v.autosave.rccadx';d.save(auto,mark=False)
+            self.assertTrue(d.dirty);self.assertEqual(d.path,path)
+            o=Document.load(path)
+            self.assertEqual(list(o.snapshots),['v1']);self.assertEqual(len(o.snapshots['v1']['states']),2)
+            o.restore_snapshot('v1');self.assertEqual(len(o.states()),2);self.assertTrue(o.backup)
+            o.restore_backup();self.assertEqual(len(o.states()),3)
+            o.delete_snapshot('v1');self.assertFalse(o.snapshots)
+            self.assertEqual(len(Document.load(auto).states()),4)
+
     def test_corrupted_project(self):
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'bad.rccadx';path.write_bytes(b'not a zip')

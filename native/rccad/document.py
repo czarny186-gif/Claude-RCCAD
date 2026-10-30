@@ -38,6 +38,7 @@ class Document:
         self.info = {'label': 'Początek', 'icon': 'start'}
         self.constraints = []   # więzy wymiarów między szkicami: {a, ai, b, bi, k} - wymiar bi szkicu b = k * wymiar ai szkicu a
         self.variables = {}     # zmienne projektu: nazwa -> wyrażenie (liczone po kolei), używane w polach {'expr': ...}
+        self.snapshots = {}   # warianty: nazwa -> dict(states, current, constraints, variables) - pełne osie czasu zapisane w projekcie
         self.backup = None   # poprzednia oś czasu sprzed edycji kroku historii (do cofnięcia edycji)
         self.path: Path | None = None
         self._revision = 0
@@ -175,6 +176,23 @@ class Document:
         states[index] = (bodies, info)
         self._set_states(states, len(self._undo))
 
+    def snapshot(self, name):
+        """Zapamiętuje całą historię pod nazwą (wariant); bryły są niezmienne, więc kopia nic nie kosztuje."""
+        self.snapshots[name] = dict(states=self.states(), current=len(self._undo), constraints=list(self.constraints), variables=dict(self.variables))
+        self._revision = self._next_revision
+        self._next_revision += 1
+
+    def restore_snapshot(self, name):
+        snap = self.snapshots[name]
+        self.backup = (self.states(), len(self._undo), list(self.constraints), dict(self.variables))
+        self.constraints, self.variables = list(snap['constraints']), dict(snap['variables'])
+        self._set_states(list(snap['states']), snap['current'])
+
+    def delete_snapshot(self, name):
+        if self.snapshots.pop(name, None) is not None:
+            self._revision = self._next_revision
+            self._next_revision += 1
+
     def restore_backup(self):
         if self.backup:
             states, current, constraints, variables = self.backup
@@ -211,7 +229,7 @@ class Document:
             entry['frame'] = body.plane.to_dict()
         return entry
 
-    def save(self, path):
+    def save(self, path, mark=True):
         """Zapisuje cały projekt razem z historią: każda unikalna geometria raz (BREP), a kroki jako listy odwołań do niej."""
         path = Path(path)
         states = self.states()
@@ -223,23 +241,30 @@ class Document:
             fd, temp_path = tempfile.mkstemp(prefix=".rccad-", suffix=".tmp", dir=path.parent)
             os.close(fd)
             with tempfile.TemporaryDirectory(prefix="rccad-brep-") as work, ZipFile(temp_path, "w", ZIP_DEFLATED) as archive:
-                for bodies, info in states:
-                    entries = []
-                    for body in bodies:
-                        key = id(body.shape)
-                        if key not in index:
-                            index[key] = len(shapes)
-                            shapes.append(body.shape)
-                            source = Path(work) / f"s{index[key]}.brep"
-                            cq.exporters.export(body.shape, str(source), exportType="BREP")
-                            archive.write(source, f"shapes/{index[key]}.brep")
-                            manifest['shapes'].append(f"shapes/{index[key]}.brep")
-                        entries.append(self._entry(body, index[key]))
-                    manifest['states'].append(dict(label=info.get('label', ''), icon=info.get('icon', 'move'), op=info.get('op'), stale=bool(info.get('stale')), off=bool(info.get('off')), note=info.get('note'), group=info.get('group'), why=info.get('why'), bodies=entries))
+                def emit(timeline):
+                    out = []
+                    for bodies, info in timeline:
+                        entries = []
+                        for body in bodies:
+                            key = id(body.shape)
+                            if key not in index:
+                                index[key] = len(shapes)
+                                shapes.append(body.shape)
+                                source = Path(work) / f"s{index[key]}.brep"
+                                cq.exporters.export(body.shape, str(source), exportType="BREP")
+                                archive.write(source, f"shapes/{index[key]}.brep")
+                                manifest['shapes'].append(f"shapes/{index[key]}.brep")
+                            entries.append(self._entry(body, index[key]))
+                        out.append(dict(label=info.get('label', ''), icon=info.get('icon', 'move'), op=info.get('op'), stale=bool(info.get('stale')), off=bool(info.get('off')), note=info.get('note'), group=info.get('group'), why=info.get('why'), bodies=entries))
+                    return out
+                manifest['states'] = emit(states)
+                manifest['snapshots'] = [dict(name=name, current=snap['current'], constraints=snap['constraints'], variables=snap['variables'], states=emit(snap['states']))
+                                         for name, snap in self.snapshots.items()]
                 archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False))
             os.replace(temp_path, path)
-            self.path = path
-            self._saved_revision = self._revision
+            if mark:      # autozapis (mark=False) nie zmienia ścieżki projektu ani stanu „zapisany”
+                self.path = path
+                self._saved_revision = self._revision
         finally:
             if temp_path and Path(temp_path).exists():
                 Path(temp_path).unlink()
@@ -306,34 +331,48 @@ class Document:
                         cache[number] = (shape, None)
                     return cache[number]
 
-                built = []
-                for state in states:
-                    ids, bodies = set(), []
-                    for item in state['bodies']:
-                        shape, mesh = geometry(item['shape'], item.get('kind', 'solid'))
-                        body = cls._parse_body(item, shape, mesh)
-                        if body.id in ids:
-                            raise CadError("Nieprawidłowa struktura projektu.")
-                        ids.add(body.id)
-                        bodies.append(body)
-                    info = {'label': str(state.get('label', 'Zmiana')), 'icon': str(state.get('icon', 'move'))}
-                    if isinstance(state.get('op'), dict):
-                        info['op'] = state['op']
-                    if state.get('stale'):
-                        info['stale'] = True
-                    if state.get('off'):
-                        info['off'] = True
-                    for key in ('note', 'group', 'why'):
-                        if isinstance(state.get(key), str) and state[key]:
-                            info[key] = state[key][:80]
-                    built.append((tuple(bodies), info))
-                cons = manifest.get('constraints', [])
-                if isinstance(cons, list):
-                    result.constraints = [dict(b=str(c['b']), bi=int(c['bi']), expr=str(c['expr'])) if 'expr' in c else
-                                          dict(a=str(c['a']), ai=int(c['ai']), b=str(c['b']), bi=int(c['bi']), k=float(c.get('k', 1.0))) for c in cons if isinstance(c, dict)]
-                variables = manifest.get('variables', {})
-                if isinstance(variables, dict):
-                    result.variables = {str(k)[:40]: str(v)[:200] for k, v in variables.items()}
+                def parse(state_list):
+                  built = []
+                  for state in state_list:
+                      ids, bodies = set(), []
+                      for item in state['bodies']:
+                          shape, mesh = geometry(item['shape'], item.get('kind', 'solid'))
+                          body = cls._parse_body(item, shape, mesh)
+                          if body.id in ids:
+                              raise CadError("Nieprawidłowa struktura projektu.")
+                          ids.add(body.id)
+                          bodies.append(body)
+                      info = {'label': str(state.get('label', 'Zmiana')), 'icon': str(state.get('icon', 'move'))}
+                      if isinstance(state.get('op'), dict):
+                          info['op'] = state['op']
+                      if state.get('stale'):
+                          info['stale'] = True
+                      if state.get('off'):
+                          info['off'] = True
+                      for key in ('note', 'group', 'why'):
+                          if isinstance(state.get(key), str) and state[key]:
+                              info[key] = state[key][:80]
+                      built.append((tuple(bodies), info))
+                  return built
+
+                built = parse(states)
+                def parse_constraints(cons):
+                    return [dict(b=str(c['b']), bi=int(c['bi']), expr=str(c['expr'])) if 'expr' in c else
+                            dict(a=str(c['a']), ai=int(c['ai']), b=str(c['b']), bi=int(c['bi']), k=float(c.get('k', 1.0))) for c in cons if isinstance(c, dict)] if isinstance(cons, list) else []
+
+                def parse_variables(variables):
+                    return {str(k)[:40]: str(v)[:200] for k, v in variables.items()} if isinstance(variables, dict) else {}
+
+                result.constraints = parse_constraints(manifest.get('constraints', []))
+                result.variables = parse_variables(manifest.get('variables', {}))
+                for snap in (manifest.get('snapshots') or [])[:30]:
+                    if not isinstance(snap, dict) or not isinstance(snap.get('states'), list) or not 0 < len(snap['states']) <= 1100:
+                        continue
+                    timeline = parse(snap['states'])
+                    at = snap.get('current')
+                    result.snapshots[str(snap.get('name', 'Wariant'))[:60]] = dict(
+                        states=timeline, current=at if isinstance(at, int) and 0 <= at < len(timeline) else len(timeline) - 1,
+                        constraints=parse_constraints(snap.get('constraints', [])), variables=parse_variables(snap.get('variables', {})))
                 result._next_revision = 1
                 revisions = list(range(1, len(built) + 1))
                 result._next_revision = len(built) + 1
