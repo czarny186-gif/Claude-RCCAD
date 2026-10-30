@@ -1,0 +1,173 @@
+test_constraints_inside_one_sketch_chains_and_cycles (test_kernel.DocumentTests.test_constraints_inside_one_sketch_chains_and_cycles) ... ok
+test_corrupted_project (test_kernel.DocumentTests.test_corrupted_project) ... ok
+test_dimension_constraints_follow_and_project_keeps_notes_groups_constraints (test_kernel.DocumentTests.test_dimension_constraints_follow_and_project_keeps_notes_groups_constraints) ... ok
+test_face_reference_prefers_extreme_face_after_resizing (test_kernel.DocumentTests.test_face_reference_prefers_extreme_face_after_resizing) ... ok
+test_failed_save_preserves_previous_file (test_kernel.DocumentTests.test_failed_save_preserves_previous_file) ... ok
+test_history_and_saved_revision (test_kernel.DocumentTests.test_history_and_saved_revision) ... ok
+test_history_filter (test_kernel.DocumentTests.test_history_filter) ... ok
+test_history_recompute_through_pattern_chamfer_transform_mirror_bool (test_kernel.DocumentTests.test_history_recompute_through_pattern_chamfer_transform_mirror_bool) ... ok
+test_history_references_survive_resizing_of_the_base_body (test_kernel.DocumentTests.test_history_references_survive_resizing_of_the_base_body) ... ok
+test_project_roundtrip_solid_and_sketch (test_kernel.DocumentTests.test_project_roundtrip_solid_and_sketch) ... ok
+test_project_saves_whole_history_and_reopens_at_current_step (test_kernel.DocumentTests.test_project_saves_whole_history_and_reopens_at_current_step) ... ok
+test_snapshots_persist_share_geometry_and_autosave_does_not_mark_saved (test_kernel.DocumentTests.test_snapshots_persist_share_geometry_and_autosave_does_not_mark_saved) ... ok
+test_text_extrusion_covers_whole_text_after_edit (test_kernel.DocumentTests.test_text_extrusion_covers_whole_text_after_edit) ... ok
+test_trim_delete_sketchmeta_placement_and_fast_paths (test_kernel.DocumentTests.test_trim_delete_sketchmeta_placement_and_fast_paths) ... ok
+test_variables_expressions_recompute_all_and_persistence (test_kernel.DocumentTests.test_variables_expressions_recompute_all_and_persistence) ... ok
+test_all_edges_fillet_true_spherical_corners (test_kernel.KernelTests.test_all_edges_fillet_true_spherical_corners) ... ok
+test_bad_fillet_does_not_change_shape (test_kernel.KernelTests.test_bad_fillet_does_not_change_shape) ... ok
+test_blind_hole (test_kernel.KernelTests.test_blind_hole) ... ok
+test_boolean_operations (test_kernel.KernelTests.test_boolean_operations) ... ok
+test_box_volume (test_kernel.KernelTests.test_box_volume) ... ok
+test_chamfer (test_kernel.KernelTests.test_chamfer) ... ok
+test_circle_polygon_and_symmetric_extrusion (test_kernel.KernelTests.test_circle_polygon_and_symmetric_extrusion) ... ok
+test_dxf_sketch_roundtrip (test_kernel.KernelTests.test_dxf_sketch_roundtrip) ... ok
+test_edge_chain_follows_tangent_outline (test_kernel.KernelTests.test_edge_chain_follows_tangent_outline) ... ok
+test_empty_and_invalid_edge_selection (test_kernel.KernelTests.test_empty_and_invalid_edge_selection) ... ok
+test_exact_measurements_and_blind_hole_after_tessellation (test_kernel.KernelTests.test_exact_measurements_and_blind_hole_after_tessellation) ... ok
+test_hole_outside_rejected (test_kernel.KernelTests.test_hole_outside_rejected) ... ok
+test_hole_then_all_roundings (test_kernel.KernelTests.test_hole_then_all_roundings) ... ok
+test_invalid_dimensions (test_kernel.KernelTests.test_invalid_dimensions) ... ok
+test_non_intersecting_intersection_rejected (test_kernel.KernelTests.test_non_intersecting_intersection_rejected) ... ok
+test_sketch_and_extrude_all_planes (test_kernel.KernelTests.test_sketch_and_extrude_all_planes) ... ok
+test_sketch_from_drag_uses_workplane_axes (test_kernel.KernelTests.test_sketch_from_drag_uses_workplane_axes) ... ok
+test_step_and_brep_roundtrip (test_kernel.KernelTests.test_step_and_brep_roundtrip) ... ok
+test_stl_export_import (test_kernel.KernelTests.test_stl_export_import) ... ok
+test_through_hole (test_kernel.KernelTests.test_through_hole) ... ok
+test_transform_and_mirror (test_kernel.KernelTests.test_transform_and_mirror) ... ok
+test_wire_display_has_edges (test_kernel.KernelTests.test_wire_display_has_edges) ... ok
+test_history_timings (test_perf.HistoryPerf.test_history_timings) ... PERF dodanie jednego kroku (\u015brednio): 16.6 ms (240 krok�w \u0142\u0105cznie 3.99 s)
+PERF states+infos+timeline x1: 0.1 ms (krok�w: 242)
+PERF skok w historii (\u015brednio): 0.0 ms 
+PERF przeliczenie po edycji pierwszego kroku: 123.3 ms (nieprzeliczone: 0)
+PERF pe\u0142ne przeliczenie ca\u0142ej historii: 3.7 ms (nieprzeliczone: 0)
+PERF zapis projektu (pierwszy): 419.0 ms (230 KB)
+PERF zapis projektu (drugi, z pami\u0119ci\u0105 podr\u0119czn\u0105 BREP): 66.2 ms 
+PERF wczytanie: sam import BREP po kolei: 585.4 ms (270 plik�w)
+PERF wczytanie: sama walidacja po kolei: 497.3 ms 
+PERF wczytanie: import w 4 w\u0105tkach: 556.4 ms 
+PERF wczytanie projektu: 1451.3 ms 
+PERF pierwszy skok po wczytaniu (siatki leniwie): 411.4 ms 
+ok
+test_display_mesh_profile (test_perf.MeshPerf.test_display_mesh_profile) ... PERF siatka wyswietlania jednej bryly (box): 14.0 ms 
+PERFPROF
+         34629 function calls (31645 primitive calls) in 0.086 seconds
+
+   Ordered by: internal time
+   List reduced from 53 to 10 due to restriction <10>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+       30    0.040    0.001    0.040    0.001 C:\hostedtoolcache\windows\Python\3.12.10\x64\Lib\site-packages\cadquery\occ_impl\shapes.py:1465(mesh)
+      720    0.008    0.000    0.008    0.000 C:\hostedtoolcache\windows\Python\3.12.10\x64\Lib\site-packages\cadquery\occ_impl\shapes.py:1938(paramAt)
+      360    0.006    0.000    0.008    0.000 C:\hostedtoolcache\windows\Python\3.12.10\x64\Lib\site-packages\numpy\_core\function_base.py:26(linspace)
+    300/2    0.004    0.000    0.001    0.001 C:\hostedtoolcache\windows\Python\3.12.10\x64\Lib\site-packages\cadquery\occ_impl\shapes.py:400(downcast)
+  1440/48    0.004    0.000    0.000    0.000 C:\hostedtoolcache\windows\Python\3.12.10\x64\Lib\site-packages\cadquery\occ_impl\shapes.py:392(shapetype)
+     1800    0.003    0.000    0.003    0.000 C:\hostedtoolcache\windows\Python\3.12.10\x64\Lib\site-packages\cadquery\occ_impl\shapes.py:2348(_geomAdaptor)
+     2160    0.003    0.000    0.003    0.000 {built-in method OCP.OCP.TopoDS.Edge_s}
+     1470    0.002    0.000    0.002    0.000 C:\hostedtoolcache\windows\Python\3.12.10\x64\Lib\site-packages\cadquery\occ_impl\geom.py:105(x)
+     1080    0.002    0.000    0.002    0.000 {built-in method builtins.hash}
+      420    0.001    0.000    0.001    0.000 {built-in method numpy.asarray}
+
+
+
+ok
+test_history_bar_and_refresh (test_perf.StudioPerf.test_history_bar_and_refresh) ... PERF dodanie jednego kroku (\u015brednio): 16.0 ms (240 krok�w \u0142\u0105cznie 3.85 s)
+PERF okno: od\u015bwie\u017cenie z paskiem ukrytym: 22.2 ms 
+PERF okno: pierwsze zbudowanie paska historii: 311.4 ms (symboli: 242)
+PERF okno: skok w historii z od\u015bwie\u017ceniem (\u015brednio): 28.0 ms 
+PERF okno: samo od\u015bwie\u017cenie bez zmian (\u015brednio): 7.6 ms 
+PERF okno: od\u015bwie\u017cenie po dodaniu kroku: 12.4 ms 
+ok
+test_cut_depth_and_mode_edit (test_scenarios.ScenarioTests.test_cut_depth_and_mode_edit) ... ok
+test_embossed_text_on_solid_face_frame_then_edit_text (test_scenarios.ScenarioTests.test_embossed_text_on_solid_face_frame_then_edit_text) ... ok
+test_extrude_from_solid_face_and_vertex_fillet_follow_base_resize (test_scenarios.ScenarioTests.test_extrude_from_solid_face_and_vertex_fillet_follow_base_resize) ... ok
+test_extrude_two_profiles_as_new_bodies_then_boolean (test_scenarios.ScenarioTests.test_extrude_two_profiles_as_new_bodies_then_boolean) ... ok
+test_hole_resize_in_the_middle (test_scenarios.ScenarioTests.test_hole_resize_in_the_middle) ... ok
+test_hole_then_more_steps_then_resize_base_and_continue (test_scenarios.ScenarioTests.test_hole_then_more_steps_then_resize_base_and_continue) ... ok
+test_ids_of_pattern_copies_are_stable_when_count_changes (test_scenarios.ScenarioTests.test_ids_of_pattern_copies_are_stable_when_count_changes) ... ok
+test_joined_pattern_and_boolean_follow_part_resize (test_scenarios.ScenarioTests.test_joined_pattern_and_boolean_follow_part_resize) ... ok
+test_mirror_and_union_follow_base_edit (test_scenarios.ScenarioTests.test_mirror_and_union_follow_base_edit) ... ok
+test_project_roundtrip_in_the_middle_of_work (test_scenarios.ScenarioTests.test_project_roundtrip_in_the_middle_of_work) ... ok
+test_rect_pattern_with_step_on_a_copy_then_more_copies (test_scenarios.ScenarioTests.test_rect_pattern_with_step_on_a_copy_then_more_copies) ... ok
+test_text_cut_then_edit_text_matches_fresh (test_scenarios.ScenarioTests.test_text_cut_then_edit_text_matches_fresh) ... ok
+test_toggle_delete_and_move_steps_match_fresh (test_scenarios.ScenarioTests.test_toggle_delete_and_move_steps_match_fresh) ... ok
+test_trim_pieces_and_followup_delete_survive_sketch_edit (test_scenarios.ScenarioTests.test_trim_pieces_and_followup_delete_survive_sketch_edit) ... ok
+test_user_scenario_box_text_two_side_holes_then_change_text (test_scenarios.ScenarioTests.test_user_scenario_box_text_two_side_holes_then_change_text)
+Prostok\u0105t -> bry\u0142a, napis �Radek� wyci\u0105gni\u0119ty na g�rze, po otworze w dw�ch bocznych \u015bcianach, powr�t i zmiana napisu na �Zosia�. ... ok
+test_arc_apex_and_height (test_sketchmeta.SketchMetaTests.test_arc_apex_and_height) ... ok
+test_drag_grips (test_sketchmeta.SketchMetaTests.test_drag_grips) ... ok
+test_text_box_and_drag (test_sketchmeta.SketchMetaTests.test_text_box_and_drag) ... ok
+test_values_roundtrip_all_shapes (test_sketchmeta.SketchMetaTests.test_values_roundtrip_all_shapes) ... ok
+test_all_supported_shapes_create_sketches (test_studio.StudioTests.test_all_supported_shapes_create_sketches) ... ok
+test_arc_is_editable_after_drawing (test_studio.StudioTests.test_arc_is_editable_after_drawing) ... ok
+test_arc_point_construction_rect3 (test_studio.StudioTests.test_arc_point_construction_rect3) ... ok
+test_boolean_base_and_tool_selection_with_live_result (test_studio.StudioTests.test_boolean_base_and_tool_selection_with_live_result) ... ok
+test_chamfer (test_studio.StudioTests.test_chamfer) ... ok
+test_corner_vertex_is_blended_alone_and_face_double_click_selects_edges (test_studio.StudioTests.test_corner_vertex_is_blended_alone_and_face_double_click_selects_edges) ... ok
+test_cube_arrows_auto_cut_xray_pick_and_splash (test_studio.StudioTests.test_cube_arrows_auto_cut_xray_pick_and_splash) ... ok
+test_cube_button_picks_sketch_plane_and_grid_adapts (test_studio.StudioTests.test_cube_button_picks_sketch_plane_and_grid_adapts) ... ok
+test_cube_face_preselects_sketch_plane_and_grid_button (test_studio.StudioTests.test_cube_face_preselects_sketch_plane_and_grid_button) ... ok
+test_defaults_and_auto_new_body (test_studio.StudioTests.test_defaults_and_auto_new_body) ... ok
+test_escape_and_right_click_keep_line_and_leave_drawing (test_studio.StudioTests.test_escape_and_right_click_keep_line_and_leave_drawing) ... ok
+test_every_button_click_raises_no_exception (test_studio.StudioTests.test_every_button_click_raises_no_exception) ... ok
+test_extrude_arrow_drag_changes_distance_live (test_studio.StudioTests.test_extrude_arrow_drag_changes_distance_live) ... ok
+test_extrude_by_clicking_profile_with_preview (test_studio.StudioTests.test_extrude_by_clicking_profile_with_preview) ... ok
+test_extrude_face_of_solid_joins_and_cuts (test_studio.StudioTests.test_extrude_face_of_solid_joins_and_cuts) ... ok
+test_file_menu_and_context_menu_open (test_studio.StudioTests.test_file_menu_and_context_menu_open) ... ok
+test_fillet_arrow_and_live_preview (test_studio.StudioTests.test_fillet_arrow_and_live_preview) ... ok
+test_handles_are_drawn_on_top_overlay_and_draggable (test_studio.StudioTests.test_handles_are_drawn_on_top_overlay_and_draggable) ... ok
+test_help_dialog_selection_glow_and_mirror_steps (test_studio.StudioTests.test_help_dialog_selection_glow_and_mirror_steps) ... ok
+test_history_edit_recomputes_following_steps_and_can_be_reverted (test_studio.StudioTests.test_history_edit_recomputes_following_steps_and_can_be_reverted) ... D:\a\Claude-RCCAD\Claude-RCCAD\native\rccad\studio.py:3878: RuntimeWarning: Failed to disconnect (None) from signal "timeout()".
+  timer.timeout.disconnect()
+ok
+test_history_timeline_fades_used_sketch_and_jumps_between_steps (test_studio.StudioTests.test_history_timeline_fades_used_sketch_and_jumps_between_steps) ... ok
+test_hover_cursor_only_after_first_click (test_studio.StudioTests.test_hover_cursor_only_after_first_click) ... ok
+test_idle_planes_axes_close_prompt_and_reverse_arrow (test_studio.StudioTests.test_idle_planes_axes_close_prompt_and_reverse_arrow) ... ok
+test_layout_matches_html_measurements (test_studio.StudioTests.test_layout_matches_html_measurements) ... ok
+test_line_chain_closes_into_extrudable_profile (test_studio.StudioTests.test_line_chain_closes_into_extrudable_profile) ... ok
+test_local_piece_preview_matches_edge_and_pattern_candidate_prefers_sketch (test_studio.StudioTests.test_local_piece_preview_matches_edge_and_pattern_candidate_prefers_sketch) ... ok
+test_measure_does_not_create_geometry (test_studio.StudioTests.test_measure_does_not_create_geometry) ... ok
+test_mirror_object_then_face (test_studio.StudioTests.test_mirror_object_then_face) ... ok
+test_move_and_rotate_selected_solid_live (test_studio.StudioTests.test_move_and_rotate_selected_solid_live) ... ok
+test_move_selected_sketch (test_studio.StudioTests.test_move_selected_sketch) ... ok
+test_open_line_finishes_on_double_point (test_studio.StudioTests.test_open_line_finishes_on_double_point) ... ok
+test_operation_after_history_jump_is_inserted_and_later_steps_recomputed (test_studio.StudioTests.test_operation_after_history_jump_is_inserted_and_later_steps_recomputed) ... ok
+test_overlapping_shapes_make_regions_and_extrude_overlap (test_studio.StudioTests.test_overlapping_shapes_make_regions_and_extrude_overlap) ... ok
+test_rectangle_is_live_on_any_plane (test_studio.StudioTests.test_rectangle_is_live_on_any_plane) ... ok
+test_rotated_sketch_extrudes_along_its_tilt (test_studio.StudioTests.test_rotated_sketch_extrudes_along_its_tilt) ... ok
+test_shape_icons_and_menu_card (test_studio.StudioTests.test_shape_icons_and_menu_card) ... ok
+test_sketch_on_solid_face_and_live_preview (test_studio.StudioTests.test_sketch_on_solid_face_and_live_preview) ... ok
+test_smallest_coplanar_region_wins_over_old_profile (test_studio.StudioTests.test_smallest_coplanar_region_wins_over_old_profile) ... ok
+test_snap_to_existing_sketch_corner (test_studio.StudioTests.test_snap_to_existing_sketch_corner) ... ok
+test_svg_import (test_studio.StudioTests.test_svg_import) ... D:\a\Claude-RCCAD\Claude-RCCAD\native\tests\test_studio.py:475: ResourceWarning: unclosed file <_io.TextIOWrapper name='C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\tmp3a_g18zq\\a.svg' mode='w' encoding='cp1252'>
+  f=os.path.join(d,'a.svg');open(f,'w').write('<svg xmlns="http://www.w3.org/2000/svg"><rect x="0" y="0" width="20" height="10"/><circle cx="5" cy="5" r="2"/><path d="M0 0 L10 0 L10 10 Z"/></svg>')
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_tab_numeric_edit_polygon_sides_and_clear_all (test_studio.StudioTests.test_tab_numeric_edit_polygon_sides_and_clear_all) ... ok
+test_tangent_circle_between_two_lines (test_studio.StudioTests.test_tangent_circle_between_two_lines) ... ok
+test_text_wizard_surface_area_handles_and_enter (test_studio.StudioTests.test_text_wizard_surface_area_handles_and_enter) ... ok
+test_tool_toggle_select_and_drag_resize (test_studio.StudioTests.test_tool_toggle_select_and_drag_resize) ... ok
+test_transform_preview_is_instant_matrix (test_studio.StudioTests.test_transform_preview_is_instant_matrix) ... ok
+test_trim_removes_clicked_segment (test_studio.StudioTests.test_trim_removes_clicked_segment) ... ok
+test_trim_splits_at_intersection (test_studio.StudioTests.test_trim_splits_at_intersection) ... ok
+test_trimmed_union_outline_is_one_extrudable_region (test_studio.StudioTests.test_trimmed_union_outline_is_one_extrudable_region) ... ok
+test_two_sided_extrude (test_studio.StudioTests.test_two_sided_extrude) ... ok
+test_typed_dimensions_are_live (test_studio.StudioTests.test_typed_dimensions_are_live) ... ok
+test_undo_redo_and_escape (test_studio.StudioTests.test_undo_redo_and_escape) ... ok
+test_creation_updates_native_tree_properties_and_undo (test_ui.NativeUiTests.test_creation_updates_native_tree_properties_and_undo) ... ok
+test_edge_selection_and_fillet_apply (test_ui.NativeUiTests.test_edge_selection_and_fillet_apply) ... ok
+test_export_and_import_through_native_actions (test_ui.NativeUiTests.test_export_and_import_through_native_actions) ... ok
+test_failed_operation_keeps_model (test_ui.NativeUiTests.test_failed_operation_keeps_model) ... ok
+test_graphical_buttons_create_body_and_choose_navigation (test_ui.NativeUiTests.test_graphical_buttons_create_body_and_choose_navigation) ... ok
+test_mouse_sketch_creates_visible_sketch_on_plane (test_ui.NativeUiTests.test_mouse_sketch_creates_visible_sketch_on_plane) ... ok
+test_multiple_selection_toggle_needs_no_keyboard (test_ui.NativeUiTests.test_multiple_selection_toggle_needs_no_keyboard) ... ok
+test_projection_ray_and_visible_edge_picking (test_ui.NativeUiTests.test_projection_ray_and_visible_edge_picking) ... ok
+test_save_and_open_through_native_actions (test_ui.NativeUiTests.test_save_and_open_through_native_actions) ... ok
+test_shift_click_selects_tangent_chain_and_plain_click_one_edge (test_ui.NativeUiTests.test_shift_click_selects_tangent_chain_and_plain_click_one_edge) ... ok
+test_visibility_is_reversible (test_ui.NativeUiTests.test_visibility_is_reversible) ... ok
+test_worker_applies_result_on_gui_thread (test_ui.NativeUiTests.test_worker_applies_result_on_gui_thread) ... ok
+
+----------------------------------------------------------------------
+Ran 122 tests in 116.330s
+
+OK
+sys:1: ResourceWarning: unclosed file <_io.TextIOWrapper name='diag_hang.txt' mode='w' encoding='cp1252'>
